@@ -135,14 +135,14 @@ def find_and_update_topup(topup_id, updates):
         return user_id
     return None
 
-def get_user_orders(user_id, limit=5):
+def get_user_orders(user_id, limit=999999999):
     user = get_user(user_id)
     if not user: return []
     # Sort descending by timestamp and get latest 5
     orders = sorted(user.get("orders", []), key=lambda x: x.get('timestamp', ''), reverse=True)
     return orders[:limit]
 
-def get_user_topups(user_id, limit=5):
+def get_user_topups(user_id, limit=9999999999):
     user = get_user(user_id)
     if not user: return []
     # Sort descending by timestamp and get latest 5
