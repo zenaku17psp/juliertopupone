@@ -5,28 +5,18 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ChatMember, User
 
 # env.py file မှ settings များကို import လုပ်ပါ
+# env.py file မှ settings များကို import လုပ်ပါ
 try:
     BOT_TOKEN = os.environ.get("BOT_TOKEN")
     ADMIN_ID = int(os.environ.get("ADMIN_ID"))
     MONGO_URL = os.environ.get("MONGO_URL")
     
-    # --- Group ID အသစ် ပြောင်းလဲမှု ---
-    ADMIN_GROUP_IDS_STR = os.environ.get("ADMIN_GROUP_IDS") # 's' ပါတဲ့ variable အသစ်ကို ယူ
+    # --- Group ID ကို မူလ (Singular) ပုံစံသို့ ပြန်ပြောင်း ---
+    ADMIN_GROUP_ID = int(os.environ.get("ADMIN_GROUP_ID")) # 'S' မပါ၊ တစ်ခုတည်း
     
-    if not all([BOT_TOKEN, ADMIN_ID, MONGO_URL, ADMIN_GROUP_IDS_STR]): # ADMIN_GROUP_ID အဟောင်းကို ဖြုတ်
-        print("Error: Environment variables များ (BOT_TOKEN, ADMIN_ID, MONGO_URL, ADMIN_GROUP_IDS) မပြည့်စုံပါ။")
+    if not all([BOT_TOKEN, ADMIN_ID, MONGO_URL, ADMIN_GROUP_ID]):
+        print("Error: Environment variables များ (BOT_TOKEN, ADMIN_ID, MONGO_URL, ADMIN_GROUP_ID) မပြည့်စုံပါ။")
         exit()
-
-    # String ကို List of Integers အဖြစ် ပြောင်းလဲခြင်း
-    try:
-        ADMIN_GROUP_IDS = [int(gid.strip()) for gid in ADMIN_GROUP_IDS_STR.split(',')]
-        if not ADMIN_GROUP_IDS:
-             raise ValueError("Group ID list is empty")
-        print(f"✅ Admin groups loaded: {ADMIN_GROUP_IDS}")
-    except ValueError:
-        print(f"Error: ADMIN_GROUP_IDS format မှားနေပါသည်။ ('-123,-456' ပုံစံဖြစ်ရမည်)")
-        exit()
-    # --- Group ID ပြောင်းလဲမှု ပြီးပါပြီ ---
 
 except Exception as e:
     print(f"Error: Environment variables များ load လုပ်ရာတွင် အမှားဖြစ်နေပါသည်: {e}")
@@ -535,30 +525,21 @@ async def mmb_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     try:
-        group_msg = (
-            f"🛒 ***အော်ဒါအသစ် ရောက်ပါပြီ!***\n\n"
-            f"📝 ***Order ID:*** `{order_id}`\n"
-            f"👤 ***User Name:*** [{user_name}](tg://user?id={user_id})\n"
-            f"🎮 ***Game ID:*** `{game_id}`\n"
-            f"🌐 ***Server ID:*** `{server_id}`\n"
-            f"💎 ***Amount:*** {amount}\n"
-            f"💰 ***Price:*** {price:,} MMK\n"
-            f"📊 ***Status:*** ⏳ စောင့်ဆိုင်းနေသည်\n\n"
-            f"#NewOrder"
-        )
-        
-        # Loop ပတ်ပြီး group အားလုံးကို ပို့ပါ
-        for group_id in ADMIN_GROUP_IDS:
-            try:
-                if await is_bot_admin_in_group(context.bot, group_id):
-                    await context.bot.send_message(chat_id=group_id, text=group_msg, parse_mode="Markdown")
-                else:
-                    print(f"Order notification: Bot is not admin in group {group_id}, skipping.")
-            except Exception as loop_e:
-                print(f"Failed to send order notification to group {group_id}: {loop_e}")
-
+        if await is_bot_admin_in_group(context.bot, ADMIN_GROUP_ID):
+            group_msg = (
+                f"🛒 ***အော်ဒါအသစ် ရောက်ပါပြီ!***\n\n"
+                f"📝 ***Order ID:*** `{order_id}`\n"
+                f"👤 ***User Name:*** [{user_name}](tg://user?id={user_id})\n"
+                f"🎮 ***Game ID:*** `{game_id}`\n"
+                f"🌐 ***Server ID:*** `{server_id}`\n"
+                f"💎 ***Amount:*** {amount}\n"
+                f"💰 ***Price:*** {price:,} MMK\n"
+                f"📊 ***Status:*** ⏳ စောင့်ဆိုင်းနေသည်\n\n"
+                f"#NewOrder"
+            )
+            await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
     except Exception as e:
-        print(f"Error preparing group notification for mmb_command: {e}")
+        print(f"Error sending to admin group in mmb_command: {e}")
         pass
 
     await update.message.reply_text(
@@ -1289,8 +1270,6 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user_doc = db.get_user(target_user_id)
         user_name = user_doc.get("name", "Unknown") if user_doc else "Unknown"
-        
-        # FIX 1: Indentation (space) ကို ပြန်ညှိထားပါသည်
         group_msg = (
             f"🚫 ***User Ban ဖြစ်ပါပြီ!***\n\n"
             f"👤 ***User:*** [{user_name}](tg://user?id={target_user_id})\n"
@@ -1298,22 +1277,10 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 ***Ban လုပ်သူ:*** {admin_name}\n"
             f"#UserBanned"
         )
-        
-        # Loop ပတ်ပြီး group အားလုံးကို ပို့ပါ
-        for group_id in ADMIN_GROUP_IDS:
-            try:
-                if await is_bot_admin_in_group(context.bot, group_id):
-                    await context.bot.send_message(chat_id=group_id, text=group_msg, parse_mode="Markdown")
-                else:
-                    # FIX 2: Error message ကို "Ban notification" အဖြစ် ပြင်ထားပါသည်
-                    print(f"Ban notification: Bot is not admin in group {group_id}, skipping.")
-            except Exception as loop_e:
-                # FIX 3: Error message ကို "Ban notification" အဖြစ် ပြင်ထားပါသည်
-                print(f"Failed to send ban notification to group {group_id}: {loop_e}")
-
+        if await is_bot_admin_in_group(context.bot, ADMIN_GROUP_ID):
+            await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
     except Exception as e:
-        # FIX 4: Error message ကို "ban_command" အဖြစ် ပြင်ထားပါသည်
-        print(f"Error preparing group notification for ban_command: {e}")
+        print(f"Error sending to admin group in ban_command: {e}")
         pass
 
     await update.message.reply_text(
@@ -1378,7 +1345,6 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_doc = db.get_user(target_user_id)
         user_name = user_doc.get("name", "Unknown") if user_doc else "Unknown"
         
-        # FIX 1: Indentation (space) ကို ပြန်ညှိထားပါသည်
         group_msg = (
             f"✅ ***User Unban ဖြစ်ပါပြီ!***\n\n"
             f"👤 ***User:*** [{user_name}](tg://user?id={target_user_id})\n"
@@ -1386,21 +1352,11 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 ***Unban လုပ်သူ:*** {admin_name}\n"
             f"#UserUnbanned"
         )
-        
-        # Loop ပတ်ပြီး group အားလုံးကို ပို့ပါ
-        for group_id in ADMIN_GROUP_IDS:
-            try:
-                if await is_bot_admin_in_group(context.bot, group_id):
-                    await context.bot.send_message(chat_id=group_id, text=group_msg, parse_mode="Markdown")
-                else:
-                    # FIX 2: Error message ကို "Unban" အဖြစ် ပြင်ထားပါသည်
-                    print(f"Unban notification: Bot is not admin in group {group_id}, skipping.")
-            except Exception as loop_e:
-                print(f"Failed to send unban notification to group {group_id}: {loop_e}")
-
+        if await is_bot_admin_in_group(context.bot, ADMIN_GROUP_ID):
+            await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+            
     except Exception as e:
-        # FIX 3: Error message ကို "unban_command" အဖြစ် ပြင်ထားပါသည်
-        print(f"Error preparing group notification for unban_command: {e}")
+        print(f"Error sending to admin group in unban_command: {e}")
         pass
 
     await update.message.reply_text(
@@ -1466,27 +1422,23 @@ async def testgroup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ သင်သည် admin မဟုတ်ပါ!")
         return
 
-    report = "📊 ***Admin Group Test Report***\n\n"
+    report = f"📊 ***Admin Group Test Report***\n\nGroup ID: `{ADMIN_GROUP_ID}`\n"
     
-    # Loop ပတ်ပြီး group တစ်ခုချင်းစီကို စစ်ဆေးပါ
-    for group_id in ADMIN_GROUP_IDS:
-        is_admin_in_group = await is_bot_admin_in_group(context.bot, group_id)
+    try:
+        is_admin_in_group = await is_bot_admin_in_group(context.bot, ADMIN_GROUP_ID)
         
         if is_admin_in_group:
-            try:
-                await context.bot.send_message(
-                    chat_id=group_id,
-                    text=f"✅ **Test Notification**\n🔔 Bot ကနေ group {group_id} ထဲကို message ပို့နိုင်ပါပြီ!",
-                    parse_mode="Markdown"
-                )
-                report += f"✅ **Group ID: `{group_id}`**\n"
-                report += f"   Status: Admin & Message Sent\n\n"
-            except Exception as e:
-                report += f"❌ **Group ID: `{group_id}`**\n"
-                report += f"   Status: Admin, but FAILED to send message: {e}\n\n"
+            await context.bot.send_message(
+                chat_id=ADMIN_GROUP_ID,
+                text=f"✅ **Test Notification**\n🔔 Bot ကနေ group {ADMIN_GROUP_ID} ထဲကို message ပို့နိုင်ပါပြီ!",
+                parse_mode="Markdown"
+            )
+            report += "Status: ✅ **Admin & Message Sent**"
         else:
-            report += f"❌ **Group ID: `{group_id}`**\n"
-            report += f"   Status: Bot is NOT ADMIN. Message not sent.\n\n"
+            report += "Status: ❌ **Bot is NOT ADMIN.** Message not sent."
+            
+    except Exception as e:
+        report += f"Status: ❌ **FAILED** ({e})"
             
     await update.message.reply_text(report, parse_mode="Markdown")
 
@@ -2764,22 +2716,16 @@ async def send_to_group_command(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     message = " ".join(args)
-    sent_count = 0
-    
-    # Loop ပတ်ပြီး group အားလုံးကို ပို့ပါ
-    for group_id in ADMIN_GROUP_IDS:
-        try:
-            await context.bot.send_message(
-                chat_id=group_id,
-                text=f"📢 ***Admin Message***\n\n{message}",
-                parse_mode="Markdown"
-            )
-            sent_count += 1
-        except Exception as e:
-            print(f"Failed to send to group {group_id}: {e}")
-            await update.message.reply_text(f"❌ Group ID `{group_id}` သို့ message မပို့နိုင်ပါ။\nError: {str(e)}")
-
-    await update.message.reply_text(f"✅ ***Group {sent_count} ခု ထဲသို့ message ပေးပို့ပြီးပါပြီ။***")
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=f"📢 ***Admin Message***\n\n{message}",
+            parse_mode="Markdown"
+        )
+        await update.message.reply_text(f"✅ ***Group `{ADMIN_GROUP_ID}` ထဲသို့ message ပေးပို့ပြီးပါပြီ။***")
+    except Exception as e:
+        print(f"Failed to send to group {ADMIN_GROUP_ID}: {e}")
+        await update.message.reply_text(f"❌ Group ID `{ADMIN_GROUP_ID}` သို့ message မပို့နိုင်ပါ။\nError: {str(e)}")
 
 async def handle_restricted_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle all non-command messages for restricted users"""
@@ -3915,3 +3861,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+   
