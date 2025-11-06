@@ -2447,10 +2447,12 @@ async def handle_restricted_content(update: Update, context: ContextTypes.DEFAUL
     Checks for restricted state, then attempts calculation, then falls back to simple reply.
     """
     user_id = str(update.effective_user.id)
+    chat_type = update.effective_chat.type # <-- (အသစ်) Chat Type ကို စစ်ပါ
 
     load_authorized_users()
     if not is_user_authorized(user_id):
-        if update.message.text:
+        # --- (ပြင်ဆင်ပြီး) Group ထဲမှာဆိုရင် reply မပြန်တော့ပါ ---
+        if update.message.text and chat_type == "private":
             reply = simple_reply(update.message.text)
             await update.message.reply_text(reply, parse_mode="Markdown")
         return
@@ -2482,8 +2484,6 @@ async def handle_restricted_content(update: Update, context: ContextTypes.DEFAUL
                 if len(expression_to_eval) > 100:
                     raise ValueError("Expression is too long")
                 
-                # --- (ပြင်ဆင်ပြီး) ---
-                # Regex ကိုသာ အားကိုးပြီး eval() အရင်းကို သုံးပါမယ်။
                 result = eval(expression_to_eval) 
                 
                 text = f"{message_text} = {result:,}"
@@ -2492,25 +2492,30 @@ async def handle_restricted_content(update: Update, context: ContextTypes.DEFAUL
                 await update.message.chat.send_message(text)
             
             except Exception as e:
-                # Calculation failed (e.g., "5 * / 3"), fall back to simple reply
+                # Calculation failed (e.g., "5 * / 3")
                 print(f"Auto-calc failed for '{message_text}': {e}")
-                reply = simple_reply(message_text)
-                await update.message.reply_text(reply, parse_mode="Markdown")
+                # --- (ပြင်ဆင်ပြီး) Group ထဲမှာဆိုရင် reply မပြန်တော့ပါ ---
+                if chat_type == "private":
+                    reply = simple_reply(message_text)
+                    await update.message.reply_text(reply, parse_mode="Markdown")
         else:
             # --- (၂) Fallback to Simple Reply ---
-            # တွက်ချက်ရမည့် ပုံစံ မဟုတ်လျှင် (ဥပမာ "hello") ရိုးရိုး reply သာ ပြန်ပါ
-            reply = simple_reply(message_text)
-            await update.message.reply_text(reply, parse_mode="Markdown")
+            # --- (ပြင်ဆင်ပြီး) Group ထဲမှာဆိုရင် reply မပြန်တော့ပါ ---
+            if chat_type == "private":
+                reply = simple_reply(message_text)
+                await update.message.reply_text(reply, parse_mode="Markdown")
         
     else:
         # Not text (sticker, voice, gif, video, etc.)
-        await update.message.reply_text(
-            "📱 ***MLBB Diamond Top-up Bot***\n\n"
-            "💎 /mmb - Diamond ဝယ်ယူရန်\n"
-            "💰 /price - ဈေးနှုန်းများ\n"
-            "🆘 /start - အကူအညီ",
-            parse_mode="Markdown"
-        )
+        # --- (ပြင်ဆင်ပြီး) Group ထဲမှာဆိုရင် reply မပြန်တော့ပါ ---
+        if chat_type == "private":
+            await update.message.reply_text(
+                "📱 ***MLBB Diamond Top-up Bot***\n\n"
+                "💎 /mmb - Diamond ဝယ်ယူရန်\n"
+                "💰 /price - ဈေးနှုန်းများ\n"
+                "🆘 /start - အကူအညီ",
+                parse_mode="Markdown"
+            )
 
 # --- Report Commands (Using DB iteration) ---
 
