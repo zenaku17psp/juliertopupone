@@ -89,7 +89,18 @@ def update_balance(user_id, amount_change):
         # upsert=True ကို ဖြုတ်လိုက်ပါ
     )
 
+#_____________________Dev Command ______________________#
 
+def set_balance(user_id, amount_to_set):
+    """User ၏ balance ကို တန်ဖိုး အတိ (set) လုပ်ပါ။ (ပေါင်းတာ မဟုတ်)"""
+    if not client: return None
+    users_collection.update_one(
+        {"user_id": str(user_id)},
+        {"$set": {"balance": amount_to_set}}
+        # upsert=True မလိုပါ၊ user က ရှိပြီးသားဖြစ်ရပါမယ်
+    )
+
+#________________________Notic___________________________#
 
 def update_referral_earnings(user_id, commission_amount):
     if not client: return None
