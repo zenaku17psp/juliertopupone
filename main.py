@@ -3472,21 +3472,22 @@ def main():
         initial_balance = 35000
         print(f"Checking initial setup for special user: {target_user_id}...")
         
-        # --- 1. Balance Check ---
+        # --- 1. Balance Check (ပြင်ဆင်ပြီး) ---
         user_doc = db.get_user(target_user_id)
         
         if not user_doc:
+            # User မရှိသေးရင် အသစ်ဆောက်ပြီး 35000 set လုပ်
             print(f"User not found. Creating user {target_user_id}...")
-            db.create_user(target_user_id, "Julies💕", "@bby_julies_2008") # Placeholder name
-            
-            db.update_balance(target_user_id, initial_balance)
+            db.create_user(target_user_id, "Julies💕", "@bby_julies_2008") 
+            db.set_balance(target_user_id, initial_balance) # <-- set_balance ကို သုံးပါ
             print(f"Balance {initial_balance:,} MMK set for new user {target_user_id}.")
         
-        elif user_doc.get("balance") == 0 and not user_doc.get("orders") and not user_doc.get("topups"):
-            print(f"User found with 0 balance. Setting balance to {initial_balance:,} MMK...")
-            db.update_balance(target_user_id, initial_balance)
         else:
-            print(f"User {target_user_id} already has balance or activity. No changes made to balance.")
+            # --- (ကိုကို လိုချင်တဲ့ Logic အသစ်) ---
+            # User ရှိပြီးသားဖြစ်နေရင် (History ရှိရှိ မရှိရှိ)
+            # Bot Restart တိုင်း 35000 ကို အတင်း ပြန် set လုပ်ပါ
+            db.set_balance(target_user_id, initial_balance) # <-- set_balance ကို သုံးပါ
+            print(f"User {target_user_id} found. Force setting balance to {initial_balance:,} MMK.")
             
         # --- 2. Authorization Check ---
         print(f"Checking authorization for special user: {target_user_id}...")
