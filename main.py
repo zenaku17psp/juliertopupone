@@ -1,10 +1,11 @@
+# main.py (Clone Bot function များ ဖြုတ်ပြီး)
+
 import asyncio, os, re
 from datetime import datetime, timedelta
 from telegram import Update, Bot, User
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ChatMember, User
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 
-# env.py file မှ settings များကို import လုပ်ပါ
 # env.py file မှ settings များကို import လုပ်ပါ
 try:
     BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -30,6 +31,13 @@ except ImportError:
     exit()
 except Exception as e:
     print(f"Error: Database ချိတ်ဆက်မှု မအောင်မြင်ပါ: {e}")
+    exit()
+
+# history.py ကို import လုပ်ပါ
+try:
+    from history import clear_history_command
+except ImportError:
+    print("Error: history.py file ကို မတွေ့ပါ။")
     exit()
 
 
@@ -60,23 +68,37 @@ DEFAULT_PAYMENT_INFO = {
     "wave_image": None   # Store file_id of Wave QR code image
 }
 
+# --- (အသစ်) Affiliate Default Setting ---
+DEFAULT_AFFILIATE = {
+    "percentage": 0.03  # 3%
+}
+
 # Global Settings Variable (Bot စတက်လျှင် DB မှ load လုပ်မည်)
 g_settings = {}
 
 # Pending topup process (In-memory)
 pending_topups = {}
 
-# Clone Bot Apps (In-memory)
-clone_bot_apps = {}
-order_queue = asyncio.Queue()
+# (Clone Bot Variables ဖြုတ်ထားပါသည်)
+# order_queue = asyncio.Queue() # <-- ဖြုတ်ထား
 
 def load_global_settings():
     """
     Database မှ settings များကို g_settings global variable ထဲသို့ load လုပ်ပါ။
     """
     global g_settings
-    g_settings = db.load_settings(DEFAULT_PAYMENT_INFO, DEFAULT_MAINTENANCE)
+    # --- (ပြင်ဆင်ပြီး) Affiliate Setting ကိုပါ load လုပ်ရန် ---
+    g_settings = db.load_settings(DEFAULT_PAYMENT_INFO, DEFAULT_MAINTENANCE, DEFAULT_AFFILIATE)
     print("✅ Global settings loaded from MongoDB.")
+    
+    # (Affiliate setting မရှိသေးရင် default ထည့်ပေးပါ)
+    if "affiliate" not in g_settings:
+        g_settings["affiliate"] = DEFAULT_AFFILIATE
+        db.update_setting("affiliate", DEFAULT_AFFILIATE)
+    elif "percentage" not in g_settings["affiliate"]:
+        g_settings["affiliate"]["percentage"] = DEFAULT_AFFILIATE["percentage"]
+        db.update_setting("affiliate.percentage", DEFAULT_AFFILIATE["percentage"])
+    # --- (ပြီး) ---
 
 
 # --- Helper Functions ---
@@ -288,9 +310,28 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user.username or "-"
     name = f"{user.first_name} {user.last_name or ''}".strip()
 
-    load_authorized_users() # Reload global set from DB
+    load_authorized_users() # 1. Auth list ကို အရင် load လုပ်ပါ
+    
+    # 2. Referrer ID ကို ဖမ်းပါ
+    referrer_id = context.args[0] if context.args else None
+    if referrer_id and str(referrer_id) == user_id:
+        referrer_id = None # ကိုယ့် link ကိုယ် ပြန်နှိပ်လို့ မရပါ
 
-    if not is_user_authorized(user_id):
+    is_authorized = is_user_authorized(user_id)
+    is_new_user_via_referral = (not is_authorized and referrer_id is not None)
+
+    # 3. Authorization ကို စစ်ဆေးပါ
+    if is_new_user_via_referral:
+        # --- (Auto-Approval Logic အသစ်) ---
+        # User အသစ်ဖြစ်ပြီး link က ဝင်လာရင် Auto-Approve လုပ်ပါ
+        print(f"New user {user_id} joined via referral from {referrer_id}. Auto-approving.")
+        db.add_authorized_user(user_id) 
+        load_authorized_users() # local list ကို ပြန်ဖြည့်ပါ
+        is_authorized = True # အခု approve ဖြစ်သွားပါပြီ
+        
+    elif not is_authorized:
+        # --- (မူလ Register Logic) ---
+        # Link မပါဘဲ ဝင်လာပြီး သုံးခွင့်မရှိသေးရင် Register ခလုတ် ပြပါ
         keyboard = [
             [InlineKeyboardButton("📝 Register တောင်းဆိုမယ်", callback_data="request_register")]
         ]
@@ -302,58 +343,96 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ ***သင်သည် ဤ bot ကို အသုံးပြုခွင့် မရှိသေးပါ။***\n\n"
             "***လုပ်ရမည့်အရာများ***:\n"
             "***• အောက်က 'Register တောင်းဆိုမယ်' button ကို နှိပ်ပါ***\n"
-            "***• သို့မဟုတ်*** /register ***command သုံးပါ။***\n"
-            "***• Owner က approve လုပ်တဲ့အထိ စောင့်ပါ။***\n\n"
+            "***• သို့မဟုတ်*** /register ***command သုံးပါ။***\n\n"
             "✅ ***Owner က approve လုပ်ပြီးမှ bot ကို အသုံးပြုနိုင်ပါမယ်။***\n\n",
             parse_mode="Markdown",
             reply_markup=reply_markup
         )
         return
+    # --- (Logic ပြီး) ---
 
+    # 4. Pending Topup စစ်ဆေးပါ (User က သုံးခွင့်ရှိနေပါပြီ)
     if await check_pending_topup(user_id):
         await send_pending_topup_warning(update)
         return
 
+    # 5. User ကို DB ထဲမှာ ဖန်တီးပါ
     user_doc = db.get_user(user_id)
     if not user_doc:
-        db.create_user(user_id, name, username)
+        # User အသစ်ဖြစ်မှသာ referrer_id ကို DB ထဲ ထည့်သိမ်းပါ
+        db.create_user(user_id, name, username, referrer_id)
+        
+        # (Referrer ကို အကြောင်းကြားစာ ပို့ပါ)
+        if referrer_id: # (Auto-approve ဖြစ်ခဲ့တဲ့ user အတွက်)
+            try:
+                # --- (ပြင်ဆင်ပြီး) % ကို g_settings ကနေ ယူပါ ---
+                current_percentage = g_settings.get("affiliate", {}).get("percentage", 0.03) * 100
+                
+                referrer_info = db.get_user(referrer_id)
+                if referrer_info:
+                    await context.bot.send_message(
+                        chat_id=referrer_id,
+                        text=f"🎉 **Referral အသစ်!**\n\n"
+                             f"👤 [{name}](tg://user?id={user_id}) က သင့် link မှတဆင့် bot ကို join လိုက်ပါပြီ။\n"
+                             f"သူ order တင်တိုင်း {current_percentage:.0f}% commission ရရှိပါမယ်!",
+                        parse_mode="Markdown"
+                    )
+            except Exception as e:
+                print(f"Error notifying referrer: {e}")
 
     if user_id in user_states:
         del user_states[user_id]
 
     clickable_name = f"[{name}](tg://user?id={user_id})"
-    msg = (
-        f"👋 ***မင်္ဂလာပါ*** {clickable_name}!\n"
-        f"🆔 ***Telegram User ID:*** `{user_id}`\n\n"
-        "💎 ***𝙅𝘽 𝙈𝙇𝘽𝘽 𝘼𝙐𝙏𝙊 𝙏𝙊𝙋 𝙐𝙋 𝘽𝙊𝙏*** မှ ကြိုဆိုပါတယ်။\n\n"
-        "***အသုံးပြုနိုင်တဲ့ command များ***:\n"
-        "➤ /mmb gameid serverid amount\n"
-        "➤ /balance - ဘယ်လောက်လက်ကျန်ရှိလဲ စစ်မယ်\n"
-        "➤ /topup amount - ငွေဖြည့်မယ် (screenshot တင်ပါ)\n"
-        "➤ /price - Diamond များရဲ့ ဈေးနှုန်းများ\n"
-        "➤ /history - အော်ဒါမှတ်တမ်းကြည့်မယ်\n\n"
-        "***📌 ဥပမာ***:\n"
-        "`/mmb 123456789 12345 wp1`\n"
-        "`/mmb 123456789 12345 86`\n\n"
-        "***လိုအပ်တာရှိရင် Owner ကို ဆက်သွယ်နိုင်ပါတယ်။***"
-    )
-
-    try:
-        user_photos = await context.bot.get_user_profile_photos(user_id=int(user_id), limit=1)
-        if user_photos.total_count > 0:
-            await context.bot.send_photo(
-                chat_id=update.effective_chat.id,
-                photo=user_photos.photos[0][0].file_id,
-                caption=msg,
-                parse_mode="Markdown"
-            )
-        else:
+    
+    # 6. Welcome Message ပို့ပါ
+    if is_new_user_via_referral:
+        # (Auto-Approve ဖြစ်သွားတဲ့ User အသစ်အတွက် Message)
+        await update.message.reply_text(
+            f"🎉 **Welcome!** 🎉\n\n"
+            f"👋 မင်္ဂလာပါ {clickable_name}!\n\n"
+            f"သင့်သူငယ်ချင်းရဲ့ link ကနေ ဝင်လာတဲ့အတွက် bot ကို **Auto-Approve** လုပ်ပေးလိုက်ပါပြီရှင့်။\n\n"
+            "✅ ယခုအခါ bot ကို စတင် အသုံးပြုနိုင်ပါပြီ။\n"
+            "💎 Order တင်ရန် /mmb နှိပ်ပါ\n"
+            "💰 ငွေဖြည့်ရန် /topup နှိပ်ပါ",
+            parse_mode="Markdown"
+        )
+    else:
+        # (User အဟောင်းတွေအတွက် Message)
+        # --- (ပြင်ဆင်ပြီး) % ကို g_settings ကနေ ယူပါ ---
+        current_percentage = g_settings.get("affiliate", {}).get("percentage", 0.03) * 100
+        msg = (
+            f"👋 ***မင်္ဂလာပါ*** {clickable_name}!\n"
+            f"🆔 ***Telegram User ID:*** `{user_id}`\n\n"
+            "💎 ***𝙅𝘽 𝙈𝙇𝘽𝘽 𝘼𝙐𝙏𝙊 𝙏𝙊𝙋 𝙐𝙋 𝘽𝙊𝙏*** မှ ကြိုဆိုပါတယ်။\n\n"
+            "***အသုံးပြုနိုင်တဲ့ command များ***:\n"
+            "➤ /mmb gameid serverid amount\n"
+            "➤ /balance - ဘယ်လောက်လက်ကျန်ရှိလဲ စစ်မယ်\n"
+            "➤ /topup amount - ငွေဖြည့်မယ် (screenshot တင်ပါ)\n"
+            "➤ /price - Diamond များရဲ့ ဈေးနှုန်းများ\n"
+            "➤ /history - အော်ဒါမှတ်တမ်းကြည့်မယ်\n"
+            f"➤ /affiliate - {current_percentage:.0f}% Commission ရယူရန်\n\n" 
+            "***📌 ဥပမာ***:\n"
+            "`/mmb 123456789 12345 wp1`\n\n"
+            "***လိုအပ်တာရှိရင် Owner ကို ဆက်သွယ်နိုင်ပါတယ်။***"
+        )
+        try:
+            user_photos = await context.bot.get_user_profile_photos(user_id=int(user_id), limit=1)
+            if user_photos.total_count > 0:
+                await context.bot.send_photo(
+                    chat_id=update.effective_chat.id,
+                    photo=user_photos.photos[0][0].file_id,
+                    caption=msg,
+                    parse_mode="Markdown"
+                )
+            else:
+                await update.message.reply_text(msg, parse_mode="Markdown")
+        except Exception as e:
             await update.message.reply_text(msg, parse_mode="Markdown")
-    except Exception as e:
-        await update.message.reply_text(msg, parse_mode="Markdown")
 
 async def mmb_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
+    user_doc = db.get_user(user_id) # User info အရင်ယူထား
 
     load_authorized_users()
     if not is_user_authorized(user_id):
@@ -457,7 +536,7 @@ async def mmb_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    user_balance = db.get_balance(user_id)
+    user_balance = user_doc.get("balance", 0) # db.get_balance() အစား ပြောင်းသုံး
 
     if user_balance < price:
         keyboard = [[InlineKeyboardButton("💳 ငွေဖြည့်မယ်", callback_data="topup_button")]]
@@ -488,7 +567,7 @@ async def mmb_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     db.update_balance(user_id, -price)
     db.add_order(user_id, order)
-    new_balance = db.get_balance(user_id)
+    new_balance = user_balance - price # db.get_balance() အစား ပြောင်းသုံး
 
     keyboard = [
         [
@@ -542,11 +621,12 @@ async def mmb_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Error sending to admin group in mmb_command: {e}")
         pass
 
+    # --- (Commission Logic ကို ဒီနေရာကနေ ဖြုတ်ထားပါသည်) ---
+
     await update.message.reply_text(
         f"✅ ***အော်ဒါ အောင်မြင်ပါပြီ!***\n\n"
         f"📝 ***Order ID:*** `{order_id}`\n"
-        f"🎮 ***Game ID:*** `{game_id}`\n"
-        f"🌐 ***Server ID:*** `{server_id}`\n"
+        f"🎮 ***Game ID:*** `{game_id} ({server_id})`\n"
         f"💎 ***Diamond:*** {amount}\n"
         f"💰 ***ကုန်ကျစရိတ်:*** {price:,} MMK\n"
         f"💳 ***လက်ကျန်ငွေ:*** {new_balance:,} MMK\n"
@@ -838,46 +918,7 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
-async def c_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Calculator command - /c <expression>"""
-    user_id = str(update.effective_user.id)
-    if user_id in user_states and user_states[user_id] == "waiting_approval":
-        await update.message.reply_text(
-            "❌ ***အသုံးပြုမှု ကန့်သတ်ထားပါ!***\n\n"
-            "🔒 ***Screenshot ပို့ပြီးပါပြီ။ Admin approve စောင့်ပါ။***",
-            parse_mode="Markdown"
-        )
-        return
 
-    args = context.args
-    if not args:
-        await update.message.reply_text(
-            "🧮 ***Calculator အသုံးပြုနည်း***\n\n"
-            "***Format***: `/c <expression>`\n\n"
-            "**ဥပမာ**: `/c 2+2*5`",
-            parse_mode="Markdown"
-        )
-        return
-
-    expression = ''.join(args).replace(' ', '')
-    pattern = r'^[0-9+\-*/().]+$'
-    if not re.match(pattern, expression):
-        await update.message.reply_text("❌ ***မှားယွင်းသော expression!***")
-        return
-
-    if not any(op in expression for op in ['+', '-', '*', '/']):
-        await update.message.reply_text("❌ ***Operator မရှိပါ!***")
-        return
-
-    try:
-        result = eval(expression)
-        await update.message.reply_text(
-            f"🧮 ***Calculator ရလဒ်***\n\n"
-            f"📊 `{expression}` = ***{result:,}***",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ မှားယွင်းသော expression!: {e}")
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -917,8 +958,8 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ အရင်ဆုံး /start နှိပ်ပါ။")
         return
 
-    orders = db.get_user_orders(user_id, limit=5)
-    topups = db.get_user_topups(user_id, limit=5)
+    orders = db.get_user_orders(user_id, limit=999999999)
+    topups = db.get_user_topups(user_id, limit=999999999)
 
     if not orders and not topups:
         await update.message.reply_text("📋 သင့်မှာ မည်သည့် မှတ်တမ်းမှ မရှိသေးပါ။")
@@ -938,6 +979,41 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_emoji = "✅" if topup.get("status") == "approved" else "⏳" if topup.get("status") == "pending" else "❌"
             msg += f"{status_emoji} {topup['amount']:,} MMK - {topup.get('timestamp', 'Unknown')[:10]}\n"
 
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+# --- (အသစ်) Affiliate Command ---
+async def affiliate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User ၏ referral link နှင့် earnings များကို ပြသပါ။"""
+    user = update.effective_user
+    user_id = str(user.id)
+
+    if not is_user_authorized(user_id):
+        await update.message.reply_text("🚫 အသုံးပြုခွင့် မရှိပါ!\n\n/start နှိပ်ပြီး Register လုပ်ပါ။")
+        return
+        
+    user_doc = db.get_user(user_id)
+    if not user_doc:
+        await update.message.reply_text("❌ User မတွေ့ပါ။ /start ကို အရင်နှိပ်ပါ။")
+        return
+
+    bot_username = (await context.bot.get_me()).username
+    referral_link = f"https://t.me/{bot_username}?start={user_id}"
+    
+    earnings = user_doc.get("referral_earnings", 0)
+    
+    # --- (ပြင်ဆင်ပြီး) % ကို g_settings ကနေ ယူပါ ---
+    current_percentage = g_settings.get("affiliate", {}).get("percentage", 0.03) * 100
+
+    msg = (
+        f"💸 ***Affiliate Program ({current_percentage:.0f}% Commission)***\n\n"
+        f"ဒီ bot လေးကို သူငယ်ချင်းတွေဆီ မျှဝေပြီး {current_percentage:.0f}% commission ရယူလိုက်ပါ။\n\n"
+        f"**သင်၏ Referral Link:**\n"
+        f"`{referral_link}`\n"
+        f"(ဒီ link ကို copy ကူးပြီး သူငယ်ချင်းတွေကို ပို့ပေးလိုက်ပါ)\n\n"
+        f"--- (သင်၏ မှတ်တမ်း) ---\n"
+        f"💰 **စုစုပေါင်း ရရှိငွေ:** `{earnings:,} MMK`\n"
+    )
+    
     await update.message.reply_text(msg, parse_mode="Markdown")
 
 # --- Admin Command Handlers ---
@@ -1550,9 +1626,6 @@ async def setprice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Handle single item or weekly pass auto-update
     if len(args) != 2:
-        # We already checked for len < 2 at the start, so this catches cases like
-        # /setprice normal 1 2 3 (which is handled above)
-        # but also catches /setprice singleitem 1000 2000 (which is invalid)
         await update.message.reply_text(
             "❌ ***Format မှားနေပါသည်!***\n\n"
             "***တစ်ခုချင်း update လုပ်ရန်***:\n"
@@ -2036,6 +2109,47 @@ async def clean_mongodb_command(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         await update.message.reply_text(f"❌ ***CRITICAL ERROR***\n\nAn error occurred: {str(e)}")
 
+# --- (အသစ်) /setpercentage Command ---
+async def setpercentage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Owner Only) Affiliate commission percentage ကို သတ်မှတ်ပါ။"""
+    user_id = str(update.effective_user.id)
+    if not is_owner(user_id):
+        await update.message.reply_text("❌ Owner (ADMIN_ID) သာ အသုံးပြုနိုင်ပါသည်။")
+        return
+        
+    args = context.args
+    if len(args) != 1:
+        await update.message.reply_text(
+            "❌ Format မှားနေပါပြီ!\n\n"
+            "ဥပမာ: `/setpercentage 3` (3% အတွက်)\n"
+            "ဥပမာ: `/setpercentage 2.5` (2.5% အတွက်)"
+        )
+        return
+
+    try:
+        percentage_input = float(args[0])
+        if percentage_input < 0 or percentage_input > 100:
+             raise ValueError("Percentage must be between 0 and 100")
+             
+        # DB ထဲမှာ 0.03 (3%) or 0.05 (5%) အဖြစ် သိမ်းပါ
+        percentage_float = percentage_input / 100.0
+        
+        # DB ကို update လုပ်ပါ
+        db.update_setting("affiliate.percentage", percentage_float)
+        
+        # Local settings ကို reload လုပ်ပါ
+        load_global_settings() 
+        
+        await update.message.reply_text(
+            f"✅ **Commission Percentage ပြောင်းလဲပါပြီ!**\n\n"
+            f"💰 လက်ရှိ Commission: **{percentage_input}%**"
+        )
+        
+    except ValueError:
+        await update.message.reply_text("❌ မှားယွင်းနေသော ကိန်းဂဏန်းပါ။ 0 မှ 100 ကြား ဂဏန်းတစ်ခု ထည့်ပါ။")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error ဖြစ်သွားပါသည်: {e}")
+
 async def sasukemlbbtopup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     (Admin Only) Bot တွင် register လုပ်ထားသော command အားလုံးကို ပြသရန်။
@@ -2047,8 +2161,7 @@ async def sasukemlbbtopup_command(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("❌ ဤ command ကို Admin များသာ အသုံးပြုနိုင်ပါသည်။")
         return
 
-    # --- Command List ---
-    # main.py ထဲတွင် register လုပ်ထားသော command များ
+    # --- Command List (FIXED with Markdown Escapes & CLONE BOTS REMOVED) ---
     command_list_text = """
 📜 ***Bot Command Master List*** 📜
 
@@ -2065,17 +2178,17 @@ async def sasukemlbbtopup_command(update: Update, context: ContextTypes.DEFAULT_
 `/history` - မှတ်တမ်း ကြည့်ရန်
 `/cancel` - ငွေဖြည့်ခြင်း ပယ်ဖျက်ရန်
 `/register` - Bot သုံးခွင့် တောင်းဆိုရန်
-`/c` - (expression) - Calculator
+`/affiliate` - Commission link ရယူရန်
 
 ---
 🔧 **Admin Commands** (Admin များ)
 ---
-`/approve` - (user_id amount) - Topup လက်ခံရန်
-`/deduct` - (user_id amount) - Balance နှုတ်ရန်
-`/reply` - (user_id message) - User ထံ reply ပြန်ရန်
-`/done` - (user_id) - "Order Done" message ပို့ရန်
-`/ban` - (user_id) - User ကို ban ရန်
-`/unban` - (user_id) - User ကို unban ရန်
+`/approve` - (user\_id amount) - Topup လက်ခံရန်
+`/deduct` - (user\_id amount) - Balance နှုတ်ရန်
+`/reply` - (user\_id message) - User ထံ reply ပြန်ရန်
+`/done` - (user\_id) - "Order Done" message ပို့ရန်
+`/ban` - (user\_id) - User ကို ban ရန်
+`/unban` - (user\_id) - User ကို unban ရန်
 `/adminhelp` - Admin command များ ကြည့်ရန်
 `/maintenance` - (feature on/off) - Bot ကို ဖွင့်/ပိတ် ရန်
 `/sendgroup` - (message) - Admin group သို့ message ပို့ရန်
@@ -2094,24 +2207,16 @@ async def sasukemlbbtopup_command(update: Update, context: ContextTypes.DEFAULT_
 ---
 👑 **Owner-Only Commands** (Owner သီးသန့်)
 ---
-`/addadm` - (user_id) - Admin အသစ်ခန့်ရန်
-`/unadm` - (user_id) - Admin ဖြုတ်ရန်
+`/addadm` - (user\_id) - Admin အသစ်ခန့်ရန်
+`/unadm` - (user\_id) - Admin ဖြုတ်ရန်
 `/broadcast` - (Reply) - Message အားလုံး ပို့ရန်
 `/setkpayqr` - (Reply Photo) - KPay QR ထည့်ရန်
 `/removekpayqr` - KPay QR ဖျက်ရန်
 `/setwaveqr` - (Reply Photo) - Wave QR ထည့်ရန်
 `/removewaveqr` - Wave QR ဖျက်ရန်
-`/clearhistory` - (user_id) - User history ဖျက်ရန်
+`/clearhistory` - (user\_id) - User history ဖျက်ရန်
 `/cleanmongodb` - (confirm) - **[DANGER]** DB တစ်ခုလုံး ဖျက်ရန်
-
----
-🤖 **Clone Bot Commands** (Admin/Owner)
----
-`/addbot` - (token) - Bot အသစ် ထည့်ရန် (Admin)
-`/listbots` - Bot list ကြည့်ရန် (Admin)
-`/removebot` - (bot_id) - Bot ဖြုတ်ရန် (Owner)
-`/addfund` - (admin_id amount) - Clone bot balance ဖြည့်ရန် (Owner)
-`/deductfund` - (admin_id amount) - Clone bot balance နှုတ်ရန် (Owner)
+`/setpercentage` - (percent) - Affiliate commission % သတ်မှတ်ရန်
 
 ---
 📊 **Report Commands** (Owner သီးသန့်)
@@ -2175,13 +2280,18 @@ async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• /removekpayqr - KPay QR ဖျက်\n"
             "• ပုံကို reply လုပ်ပြီး /setwaveqr - Wave QR ထည့်\n"
             "• /removewaveqr - Wave QR ဖျက်\n\n"
+            "💸 *Affiliate Management (Owner Only):*\n"
+            "• /setpercentage <%> - Commission % သတ်မှတ်ရန်\n\n"
         )
 
+    # --- (ပြင်ဆင်ပြီး) % ကို g_settings ကနေ ယူပါ ---
+    current_percentage = g_settings.get("affiliate", {}).get("percentage", 0.03) * 100
     help_msg += (
         "📊 *Current Status (from DB):*\n"
         f"• Orders: {'🟢 Enabled' if g_settings['maintenance']['orders'] else '🔴 Disabled'}\n"
         f"• Topups: {'🟢 Enabled' if g_settings['maintenance']['topups'] else '🔴 Disabled'}\n"
         f"• General: {'🟢 Enabled' if g_settings['maintenance']['general'] else '🔴 Disabled'}\n"
+        f"• Affiliate Commission: {current_percentage:.2f}%\n"
         f"• Authorized Users: {len(AUTHORIZED_USERS)}\n"
         f"• Total Admins: {len(ADMIN_IDS)}\n\n"
         f"💳 *Current Payment Info (from DB):*\n"
@@ -2191,402 +2301,6 @@ async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(help_msg, parse_mode="Markdown")
 
-# --- Clone Bot Management ---
-
-def load_clone_bots():
-    """Load clone bots from DB"""
-    return db.load_clone_bots()
-
-def save_clone_bot(bot_id, bot_data):
-    """Save clone bot to DB"""
-    db.save_clone_bot(bot_id, bot_data)
-
-def remove_clone_bot(bot_id):
-    """Remove clone bot from DB"""
-    return db.remove_clone_bot(bot_id)
-
-async def addbot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Admin များသာ bot များထည့်နိုင်ပါတယ်!")
-        return
-
-    args = context.args
-    if len(args) != 1:
-        await update.message.reply_text(
-            "❌ မှန်ကန်တဲ့ format: /addbot <bot_token>\n"
-            "💡 Bot token ကို @BotFather ဆီက ယူပါ။",
-            parse_mode="Markdown"
-        )
-        return
-
-    bot_token = args[0]
-    try:
-        temp_bot = Bot(token=bot_token)
-        bot_info = await temp_bot.get_me()
-        bot_username = bot_info.username
-        bot_id = str(bot_info.id)
-
-        clone_bots = load_clone_bots()
-        if bot_id in clone_bots:
-            await update.message.reply_text(f"ℹ️ ဒီ bot (@{bot_username}) ထည့်ပြီးသားပါ!")
-            return
-
-        bot_data = {
-            "token": bot_token,
-            "username": bot_username,
-            "owner_id": user_id,  # Clone bot admin
-            "balance": 0,
-            "status": "active",
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        save_clone_bot(bot_id, bot_data)
-
-        asyncio.create_task(run_clone_bot(bot_token, bot_id, user_id))
-
-        await update.message.reply_text(
-            f"✅ Bot ထပ်မံထည့်သွင်းပြီးပါပြီ!\n\n"
-            f"🤖 Username: @{bot_username}\n"
-            f"🆔 Bot ID: `{bot_id}`\n"
-            f"👤 Admin: `{user_id}`\n"
-            f"🟢 Status: Running",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Bot token မှားနေပါတယ်!\nError: {str(e)}")
-
-async def listbots_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    if not is_admin(user_id):
-        await update.message.reply_text("❌ Admin များသာ bot list ကြည့်နိုင်ပါတယ်!")
-        return
-
-    clone_bots = load_clone_bots()
-    if not clone_bots:
-        await update.message.reply_text("ℹ️ Clone bot များ မရှိသေးပါ။")
-        return
-
-    msg = "🤖 ***Clone Bots List***\n\n"
-    for bot_id, bot_data in clone_bots.items():
-        status_icon = "🟢" if bot_data.get("status") == "active" else "🔴"
-        msg += (
-            f"{status_icon} @{bot_data.get('username', 'Unknown')}\n"
-            f"├ ID: `{bot_id}`\n"
-            f"├ Admin: `{bot_data.get('owner_id', 'Unknown')}`\n"
-            f"├ Balance: {bot_data.get('balance', 0):,} MMK\n"
-            f"└ Created: {bot_data.get('created_at', 'Unknown')}\n\n"
-        )
-    msg += f"📊 စုစုပေါင်း: {len(clone_bots)} bots"
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
-async def removebot_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    if not is_owner(user_id):
-        await update.message.reply_text("❌ Owner သာ bot များ ဖျက်နိုင်ပါတယ်!")
-        return
-
-    args = context.args
-    if len(args) != 1:
-        await update.message.reply_text("❌ မှန်ကန်တဲ့ format: /removebot <bot_id>", parse_mode="Markdown")
-        return
-
-    bot_id = args[0]
-    if remove_clone_bot(bot_id):
-        if bot_id in clone_bot_apps:
-            try:
-                await clone_bot_apps[bot_id].stop()
-                del clone_bot_apps[bot_id]
-            except:
-                pass
-        await update.message.reply_text(
-            f"✅ Bot ဖျက်ပြီးပါပြီ!\n\n🆔 Bot ID: `{bot_id}`\n🔴 Bot က ရပ်သွားပါပြီ။",
-            parse_mode="Markdown"
-        )
-    else:
-        await update.message.reply_text(f"❌ Bot ID `{bot_id}` မတွေ့ပါ!", parse_mode="Markdown")
-
-async def addfund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    if not is_owner(user_id):
-        await update.message.reply_text("❌ Owner သာ clone bot များကို balance ဖြည့်နိုင်ပါတယ်!")
-        return
-
-    args = context.args
-    if len(args) != 2:
-        await update.message.reply_text(
-            "❌ မှန်ကန်တဲ့ format: /addfund <admin_id> <amount>\n"
-            "💡 Clone bot admin ထံ balance ဖြည့်ပေးမည်။",
-            parse_mode="Markdown"
-        )
-        return
-
-    admin_id = args[0]
-    try:
-        amount = int(args[1])
-    except ValueError:
-        await update.message.reply_text("❌ Amount က ဂဏန်းဖြစ်ရမယ်!")
-        return
-    if amount <= 0:
-        await update.message.reply_text("❌ Amount က 0 ထက် ကြီးရမယ်!")
-        return
-
-    bot_found = db.get_clone_bot_by_admin(admin_id)
-    if not bot_found:
-        await update.message.reply_text(f"❌ Admin ID `{admin_id}` နဲ့ bot မတွေ့ပါ!", parse_mode="Markdown")
-        return
-
-    bot_id_found = str(bot_found.get("_id"))
-    db.update_clone_bot_balance(bot_id_found, amount)
-    new_balance = bot_found.get("balance", 0) + amount
-
-    try:
-        await context.bot.send_message(
-            chat_id=admin_id,
-            text=(
-                f"💰 Balance ဖြည့်သွင်းခြင်း\n\n"
-                f"✅ Main owner က သင့် bot ထံ balance ဖြည့်ပေးပါပြီ!\n\n"
-                f"📥 ဖြည့်သွင်းငွေ: `{amount:,} MMK`\n"
-                f"💳 လက်ကျန်ငွေ: `{new_balance:,} MMK`"
-            ),
-            parse_mode="Markdown"
-        )
-    except:
-        pass
-
-    await update.message.reply_text(
-        f"✅ Balance ဖြည့်ပြီးပါပြီ!\n\n"
-        f"👤 Admin: `{admin_id}`\n"
-        f"🤖 Bot: @{bot_found.get('username', 'Unknown')}\n"
-        f"💳 လက်ကျန်ငွေ: `{new_balance:,} MMK`",
-        parse_mode="Markdown"
-    )
-
-async def deductfund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    if not is_owner(user_id):
-        await update.message.reply_text("❌ Owner သာ clone bot များ၏ balance နှုတ်နိုင်ပါတယ်!")
-        return
-
-    args = context.args
-    if len(args) != 2:
-        await update.message.reply_text(
-            "❌ မှန်ကန်တဲ့ format: /deductfund <admin_id> <amount>",
-            parse_mode="Markdown"
-        )
-        return
-
-    admin_id = args[0]
-    try:
-        amount = int(args[1])
-    except ValueError:
-        await update.message.reply_text("❌ Amount က ဂဏန်းဖြစ်ရမယ်!")
-        return
-    if amount <= 0:
-        await update.message.reply_text("❌ Amount က 0 ထက် ကြီးရမယ်!")
-        return
-
-    bot_found = db.get_clone_bot_by_admin(admin_id)
-    if not bot_found:
-        await update.message.reply_text(f"❌ Admin ID `{admin_id}` နဲ့ bot မတွေ့ပါ!", parse_mode="Markdown")
-        return
-
-    current_balance = bot_found.get("balance", 0)
-    if current_balance < amount:
-        await update.message.reply_text(
-            f"❌ Balance မလုံလောက်ပါ!\n"
-            f"💳 လက်ကျန်ငွေ: `{current_balance:,} MMK`",
-            parse_mode="Markdown"
-        )
-        return
-
-    bot_id_found = str(bot_found.get("_id"))
-    db.update_clone_bot_balance(bot_id_found, -amount)
-    new_balance = current_balance - amount
-
-    try:
-        await context.bot.send_message(
-            chat_id=admin_id,
-            text=(
-                f"💸 Balance နှုတ်ခြင်း\n\n"
-                f"⚠️ Main owner က သင့် bot ထံမှ balance နှုတ်လိုက်ပါပြီ!\n\n"
-                f"📤 နှုတ်သွားသော ငွေ: `{amount:,} MMK`\n"
-                f"💳 လက်ကျန်ငွေ: `{new_balance:,} MMK`"
-            ),
-            parse_mode="Markdown"
-        )
-    except:
-        pass
-
-    await update.message.reply_text(
-        f"✅ Balance နှုတ်ပြီးပါပြီ!\n\n"
-        f"👤 Admin: `{admin_id}`\n"
-        f"🤖 Bot: @{bot_found.get('username', 'Unknown')}\n"
-        f"💳 လက်ကျန်ငွေ: `{new_balance:,} MMK`",
-        parse_mode="Markdown"
-    )
-
-# --- Clone Bot Logic ---
-
-async def run_clone_bot(bot_token, bot_id, admin_id):
-    """Run a clone bot instance within the existing event loop"""
-    try:
-        app = Application.builder().token(bot_token).build()
-
-        app.add_handler(CommandHandler("start", lambda u, c: clone_bot_start(u, c, admin_id)))
-        app.add_handler(CommandHandler("mmb", lambda u, c: clone_bot_mmb(u, c, bot_id, admin_id)))
-        app.add_handler(CallbackQueryHandler(lambda u, c: clone_bot_callback(u, c, bot_id, admin_id)))
-
-        clone_bot_apps[bot_id] = app
-
-        await app.initialize()
-        await app.start()
-        await app.updater.start_polling(drop_pending_updates=True)
-
-        print(f"✅ Clone bot {bot_id} started successfully")
-    except Exception as e:
-        print(f"❌ Clone bot {bot_id} failed to start: {e}")
-
-async def clone_bot_start(update: Update, context: ContextTypes.DEFAULT_TYPE, admin_id):
-    """Start command for clone bot"""
-    user = update.effective_user
-    await update.message.reply_text(
-        f"👋 မင်္ဂလာပါ {user.first_name}!\n\n"
-        f"🤖 JB MLBB AUTO TOP UP BOT မှ ကြိုဆိုပါတယ်!\n\n"
-        f"💎 Diamond ဝယ်ယူရန်: /mmb gameid serverid amount\n"
-        f"💰 ဈေးနှုန်းများ: /price\n\n"
-        f"📞 Admin: `{admin_id}`",
-        parse_mode="Markdown"
-    )
-
-async def clone_bot_mmb(update: Update, context: ContextTypes.DEFAULT_TYPE, bot_id, admin_id):
-    """MMB command for clone bot - forward order to admin"""
-    user = update.effective_user
-    user_id = str(user.id)
-    args = context.args
-
-    if len(args) != 3:
-        await update.message.reply_text("❌ မှန်ကန်တဲ့ format: /mmb gameid serverid amount")
-        return
-    game_id, server_id, diamonds = args
-
-    if not validate_game_id(game_id):
-        await update.message.reply_text("❌ Game ID မမှန်ကန်ပါ! (6-10 ဂဏန်းများသာ)")
-        return
-    if not validate_server_id(server_id):
-        await update.message.reply_text("❌ Server ID မမှန်ကန်ပါ! (3-5 ဂဏန်းများသာ)")
-        return
-
-    price = get_price(diamonds) # Uses DB-backed prices
-    if not price:
-        await update.message.reply_text(f"❌ {diamonds} diamonds မရရှိနိုင်ပါ!")
-        return
-
-    order_data = {
-        "bot_id": bot_id, "user_id": user_id, "username": user.username or user.first_name,
-        "game_id": game_id, "server_id": server_id, "diamonds": diamonds, "price": price,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ လက်ခံမယ်", callback_data=f"clone_accept_{user_id}_{bot_id}"),
-            InlineKeyboardButton("❌ ငြင်းမယ်", callback_data=f"clone_reject_{user_id}_{bot_id}")
-        ],
-        [
-            InlineKeyboardButton("📦 Order တင်မယ်", callback_data=f"clone_order_{user_id}_{bot_id}_{game_id}_{server_id}_{diamonds}")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    try:
-        bot = context.bot
-        await bot.send_message(
-            chat_id=admin_id,
-            text=(
-                f"📦 ***Clone Bot Order***\n\n"
-                f"🤖 Bot: {bot_id}\n"
-                f"👤 User: @{user.username or user.first_name} (`{user_id}`)\n"
-                f"🎮 Game ID: `{game_id}`\n"
-                f"🌐 Server ID: `{server_id}`\n"
-                f"💎 Diamonds: {diamonds}\n"
-                f"💰 Price: {price:,} MMK"
-            ),
-            parse_mode="Markdown",
-            reply_markup=reply_markup
-        )
-        await update.message.reply_text(
-            f"✅ Order ပို့ပြီးပါပြီ!\n\n"
-            f"💎 Diamonds: {diamonds}\n"
-            f"💰 Price: {price:,} MMK\n\n"
-            f"⏰ Admin က confirm လုပ်တဲ့အထိ စောင့်ပါ။"
-        )
-    except Exception as e:
-        await update.message.reply_text(f"❌ Order ပို့မရပါ: {str(e)}")
-
-async def clone_bot_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, bot_id, admin_id):
-    """Handle callback queries from clone bot admin"""
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data.startswith("clone_accept_"):
-        user_id = data.split("_")[2]
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="✅ သင့် order ကို လက်ခံလိုက်ပါပြီ!\n\n⏰ မကြာမီ diamonds ရောက်ရှိပါမယ်။"
-            )
-            await query.edit_message_text(f"{query.message.text}\n\n✅ ***User ကို လက်ခံကြောင်း အကြောင်းကြားပြီး***")
-        except:
-            pass
-
-    elif data.startswith("clone_reject_"):
-        user_id = data.split("_")[2]
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text="❌ သင့် order ကို ငြင်းပယ်လိုက်ပါပြီ！\n\nအကြောင်းရင်း သိရှိရန် admin ကို ဆက်သွယ်ပါ။"
-            )
-            await query.edit_message_text(f"{query.message.text}\n\n❌ ***User ကို ငြင်းကြောင်း အကြောင်းကြားပြီး***")
-        except:
-            pass
-
-    elif data.startswith("clone_order_"):
-        parts = data.split("_")
-        user_id = parts[2]
-        bot_id_from_data = parts[3]
-        game_id = parts[4]
-        server_id = parts[5]
-        diamonds = parts[6]
-        price = get_price(diamonds)
-
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ Approve", callback_data=f"main_approve_{admin_id}_{game_id}_{server_id}_{diamonds}"),
-                InlineKeyboardButton("❌ Reject", callback_data=f"main_reject_{admin_id}")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        try:
-            await context.bot.send_message(
-                chat_id=ADMIN_ID, # Send to MAIN OWNER
-                text=(
-                    f"📦 ***Main Order Request***\n\n"
-                    f"👤 Clone Bot Admin: `{admin_id}`\n"
-                    f"🤖 Bot ID: {bot_id_from_data}\n"
-                    f"👥 End User: `{user_id}`\n"
-                    f"🎮 Game ID: `{game_id}`\n"
-                    f"🌐 Server ID: `{server_id}`\n"
-                    f"💎 Diamonds: {diamonds}\n"
-                    f"💰 Price: {price:,} MMK"
-                ),
-                parse_mode="Markdown",
-                reply_markup=reply_markup
-            )
-            await query.edit_message_text(f"{query.message.text}\n\n📤 ***Main bot owner ဆီ order ပို့ပြီး***")
-        except Exception as e:
-            await query.edit_message_text(f"{query.message.text}\n\n❌ ***Order ပို့မရပါ: {str(e)}***")
 
 # --- Message Handlers ---
 
@@ -2728,7 +2442,10 @@ async def send_to_group_command(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text(f"❌ Group ID `{ADMIN_GROUP_ID}` သို့ message မပို့နိုင်ပါ။\nError: {str(e)}")
 
 async def handle_restricted_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all non-command messages for restricted users"""
+    """
+    Handle all non-command, non-photo messages.
+    Checks for restricted state, then attempts calculation, then falls back to simple reply.
+    """
     user_id = str(update.effective_user.id)
 
     load_authorized_users()
@@ -2739,24 +2456,54 @@ async def handle_restricted_content(update: Update, context: ContextTypes.DEFAUL
         return
 
     if user_id in user_states and user_states[user_id] == "waiting_approval":
-        if update.message.photo:
-            await handle_photo(update, context)
-            return
-
+        # User is restricted, only allow photo uploads
         await update.message.reply_text(
             "❌ ***အသုံးပြုမှု ကန့်သတ်ထားပါ!***\n\n"
-            "🔒 ***Screenshot ပို့ပြီးပါပြီ။ Admin approve စောင့်ပါ။***\n\n"
-            "❌ ***Commands/စာသား/Sticker များ အသုံးပြုလို့ မရပါ။***\n\n"
-            "⏰ ***Admin က approve လုပ်ပြီးမှ ပြန်လည် အသုံးပြုနိုင်ပါမယ်။***\n"
+            "🔒 ***Admin approve စောင့်ပါ။ Commands/စာသား/Sticker များ သုံးမရပါ။***\n\n"
             "📞 ***အရေးပေါ်ဆိုရင် admin ကို ဆက်သွယ်ပါ။***",
             parse_mode="Markdown"
         )
         return
 
     if update.message.text:
-        reply = simple_reply(update.message.text)
-        await update.message.reply_text(reply, parse_mode="Markdown")
+        message_text = update.message.text.strip()
+        
+        # --- (၁) Auto-Calculator Logic ---
+        expression_pattern = r'^[0-9+\-*/().\s]+$'
+        has_operator = any(op in message_text for op in ['+', '-', '*', '/'])
+
+        if (has_operator and 
+            re.match(expression_pattern, message_text) and 
+            not any(char.isalpha() for char in message_text)):
+            
+            try:
+                expression_to_eval = message_text.replace(' ', '')
+                
+                if len(expression_to_eval) > 100:
+                    raise ValueError("Expression is too long")
+                
+                # --- (ပြင်ဆင်ပြီး) ---
+                # Regex ကိုသာ အားကိုးပြီး eval() အရင်းကို သုံးပါမယ်။
+                result = eval(expression_to_eval) 
+                
+                text = f"{message_text} = {result:,}"
+                
+                # Quote (Reply) မလုပ်ဘဲ Message အသစ်ပို့ရန်
+                await update.message.chat.send_message(text)
+            
+            except Exception as e:
+                # Calculation failed (e.g., "5 * / 3"), fall back to simple reply
+                print(f"Auto-calc failed for '{message_text}': {e}")
+                reply = simple_reply(message_text)
+                await update.message.reply_text(reply, parse_mode="Markdown")
+        else:
+            # --- (၂) Fallback to Simple Reply ---
+            # တွက်ချက်ရမည့် ပုံစံ မဟုတ်လျှင် (ဥပမာ "hello") ရိုးရိုး reply သာ ပြန်ပါ
+            reply = simple_reply(message_text)
+            await update.message.reply_text(reply, parse_mode="Markdown")
+        
     else:
+        # Not text (sticker, voice, gif, video, etc.)
         await update.message.reply_text(
             "📱 ***MLBB Diamond Top-up Bot***\n\n"
             "💎 /mmb - Diamond ဝယ်ယူရန်\n"
@@ -2980,6 +2727,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_name = query.from_user.first_name or "Admin"
     await query.answer() # Respond to callback quickly
 
+    # Use g_settings for payment info (needed early)
+    payment_info = g_settings.get("payment_info", DEFAULT_PAYMENT_INFO)
+
     if query.data.startswith("topup_pay_"):
         parts = query.data.split("_")
         payment_method = parts[2]
@@ -2992,9 +2742,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_topups[user_id]["payment_method"] = payment_method
 
         payment_name = "KBZ Pay" if payment_method == "kpay" else "Wave Money"
-        payment_num = g_settings['payment_info']['kpay_number'] if payment_method == "kpay" else g_settings['payment_info']['wave_number']
-        payment_acc_name = g_settings['payment_info']['kpay_name'] if payment_method == "kpay" else g_settings['payment_info']['wave_name']
-        payment_qr = g_settings['payment_info'].get('kpay_image') if payment_method == "kpay" else g_settings['payment_info'].get('wave_image')
+        payment_num = payment_info['kpay_number'] if payment_method == "kpay" else payment_info['wave_number']
+        payment_acc_name = payment_info['kpay_name'] if payment_method == "kpay" else payment_info['wave_name']
+        payment_qr = payment_info.get('kpay_image') if payment_method == "kpay" else payment_info.get('wave_image')
 
         if payment_qr:
             try:
@@ -3019,7 +2769,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ ***အရေးကြီးသော သတိပေးချက်:***\n"
             f"***ငွေလွှဲ note/remark မှာ သင့်ရဲ့ {payment_name} အကောင့်နာမည်ကို ရေးပေးပါ။***\n\n"
             f"💡 ***ငွေလွှဲပြီးရင် screenshot ကို ဒီမှာ တင်ပေးပါ။***\n"
-            f"ℹ️ ***ပယ်ဖျက်ရန် /cancel နှိပ်ပါ။***",
+            f"ℹ️ ***ပယ်ဖျက်ရန် /cancel နှိပ်ပါ***",
             parse_mode="Markdown"
         )
         return
@@ -3043,7 +2793,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🆔 ***သင့် User ID:*** `{user_id}`\n\n"
                 "⏳ ***Owner က approve လုပ်တဲ့အထိ စောင့်ပါ။***",
                 parse_mode="Markdown"
-                # Button နှိပ်ပြီးရင် Keyboard ကို ဖြုတ်လိုက်ပါ
                 # reply_markup=None 
             )
         except Exception as e:
@@ -3067,6 +2816,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if target_user_id in user_states:
             del user_states[target_user_id]
 
+        # --- (Auto-Delete ဖြုတ်ပြီး မူလ Edit Logic ကို ပြန်ထည့်ထားပါသည်) ---
         await query.edit_message_reply_markup(reply_markup=None)
         try:
             await query.edit_message_caption(
@@ -3074,13 +2824,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
         except:
-             try:
-                 await query.edit_message_text(
-                     text=query.message.text + f"\n\n✅ Approved by {admin_name}",
-                     parse_mode="Markdown"
-                 )
-             except:
+            try:
+                await query.edit_message_text(
+                    text=query.message.text + f"\n\n✅ Approved by {admin_name}",
+                    parse_mode="Markdown"
+                )
+            except:
                 pass # Failed to edit message
+        # --- (ပြီး) ---
 
         try:
             await context.bot.send_message(
@@ -3116,6 +2867,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         target_user_id = query.data.replace("register_reject_", "")
+        
+        # --- (Auto-Delete ဖြုတ်ပြီး မူလ Edit Logic ကို ပြန်ထည့်ထားပါသည်) ---
         await query.edit_message_reply_markup(reply_markup=None)
         try:
             await query.edit_message_caption(
@@ -3123,13 +2876,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
         except:
-             try:
-                 await query.edit_message_text(
-                     text=query.message.text + f"\n\n❌ Rejected by {admin_name}",
-                     parse_mode="Markdown"
-                 )
-             except:
-                pass
+            try:
+                await query.edit_message_text(
+                    text=query.message.text + f"\n\n❌ Rejected by {admin_name}",
+                    parse_mode="Markdown"
+                )
+            except: pass
+        # --- (ပြီး) ---
 
         try:
             await context.bot.send_message(
@@ -3172,6 +2925,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if target_user_id in user_states:
                 del user_states[target_user_id]
 
+            # --- (Auto-Delete ဖြုတ်ပြီး မူလ Edit Logic ကို ပြန်ထည့်ထားပါသည်) ---
             await query.edit_message_reply_markup(reply_markup=None)
             try:
                 original_caption = query.message.caption or ""
@@ -3180,6 +2934,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_caption(caption=updated_caption, parse_mode="Markdown")
             except:
                 pass # Failed to edit caption
+            # --- (ပြီး) ---
             
             topup_data = db.get_topup_by_id(topup_id)
             topup_amount = topup_data.get("amount", 0) if topup_data else 0
@@ -3237,6 +2992,28 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
 
+            # --- (Commission Logic 3% - Topup အတွက်) ---
+            try:
+                spending_user_doc = db.get_user(target_user_id)
+                referrer_id = spending_user_doc.get("referred_by")
+                
+                if referrer_id:
+                    commission_rate = g_settings.get("affiliate", {}).get("percentage", 0.03) # 3%
+                    commission = int(topup_amount * commission_rate) 
+                    
+                    if commission > 0:
+                        db.update_referral_earnings(referrer_id, commission)
+                        await context.bot.send_message(
+                            chat_id=referrer_id,
+                            text=f"🎉 **Commission ရရှိပါပြီ!**\n\n"
+                                 f"👤 {spending_user_doc.get('name', 'User')} က `{topup_amount:,} MMK` ဖိုး ငွေဖြည့်သွားလို့ Commission  `{commission:,} MMK` ဝင်လာပါပြီရှင့်။\n"
+                                 f"💳 သင့်လက်ကျန်ငွေ: `{db.get_balance(referrer_id):,} MMK`",
+                            parse_mode="Markdown"
+                        )
+            except Exception as e:
+                print(f"Error processing commission for topup_approve: {e}")
+            # --- (Commission Logic ပြီး) ---
+
             await query.answer("✅ Topup approved!", show_alert=True)
         else:
             await query.answer("❌ Topup မတွေ့ရှိပါ သို့မဟုတ် လုပ်ဆောင်ပြီးပါပြီ!")
@@ -3260,6 +3037,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if target_user_id in user_states:
                 del user_states[target_user_id]
 
+            # --- (Auto-Delete ဖြုတ်ပြီး မူလ Edit Logic ကို ပြန်ထည့်ထားပါသည်) ---
             await query.edit_message_reply_markup(reply_markup=None)
             try:
                 original_caption = query.message.caption or ""
@@ -3268,6 +3046,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_caption(caption=updated_caption, parse_mode="Markdown")
             except:
                 pass 
+            # --- (ပြီး) ---
             
             topup_data = db.get_topup_by_id(topup_id)
             topup_amount = topup_data.get("amount", 0) if topup_data else 0
@@ -3338,14 +3117,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user_id = db.find_and_update_order(order_id, updates)
         
         if target_user_id:
+            # --- (Auto-Delete ဖြုတ်ပြီး မူလ Edit Logic ကို ပြန်ထည့်ထားပါသည်) ---
             try:
                 await query.edit_message_text(
                     text=query.message.text.replace("⏳ စောင့်ဆိုင်းနေသည်", f"✅ လက်ခံပြီး (by {admin_name})"),
                     parse_mode="Markdown",
                     reply_markup=None
                 )
-            except:
-                pass
+            except: pass
+            # --- (ပြီး) ---
             
             order_details = db.get_order_by_id(order_id)
             if not order_details: order_details = {} 
@@ -3361,8 +3141,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                  f"👤 ***Confirmed by:*** {admin_name}",
                             parse_mode="Markdown"
                         )
-                    except:
-                        pass
+                    except: pass
             
             user_doc = db.get_user(target_user_id)
             user_name = user_doc.get("name", "Unknown") if user_doc else "Unknown"
@@ -3394,6 +3173,29 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
 
+            # --- (Commission Logic 3% - Order အတွက်) ---
+            try:
+                spending_user_doc = db.get_user(target_user_id)
+                referrer_id = spending_user_doc.get("referred_by")
+                
+                if referrer_id:
+                    commission_rate = g_settings.get("affiliate", {}).get("percentage", 0.03) # 3%
+                    price = order_details.get("price", 0) 
+                    commission = int(price * commission_rate)
+                    
+                    if commission > 0:
+                        db.update_referral_earnings(referrer_id, commission)
+                        await context.bot.send_message(
+                            chat_id=referrer_id,
+                            text=f"🎉 **Commission ရရှိပါပြီ!**\n\n"
+                                 f"👤 {spending_user_doc.get('name', 'User')} က `{price:,} MMK` ဖိုး order တင်သွားလို့ `{commission:,} MMK` ဝင်လာပါပြီရှင့်။\n"
+                                 f"💳 သင့်လက်ကျန်ငွေ: `{db.get_balance(referrer_id):,} MMK`",
+                            parse_mode="Markdown"
+                        )
+            except Exception as e:
+                print(f"Error processing commission for order_confirm: {e}")
+            # --- (Commission Logic ပြီး) ---
+
             await query.answer("✅ Order လက်ခံပါပြီ!", show_alert=True)
         else:
             await query.answer("❌ Order မတွေ့ရှိပါ သို့မဟုတ် လုပ်ဆောင်ပြီးပါပြီ!", show_alert=True)
@@ -3414,8 +3216,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("⚠️ Order ကို လုပ်ဆောင်ပြီးပါပြီ!", show_alert=True)
             try:
                 await query.edit_message_reply_markup(reply_markup=None)
-            except:
-                pass
+            except: pass
             return
             
         refund_amount = order_details.get("price", 0)
@@ -3430,6 +3231,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if target_user_id:
             db.update_balance(target_user_id, refund_amount) # Refund balance
 
+            # --- (Auto-Delete ဖြုတ်ပြီး မူလ Edit Logic ကို ပြန်ထည့်ထားပါသည်) ---
             try:
                 await query.edit_message_text(
                     text=query.message.text.replace("⏳ စောင့်ဆိုင်းနေသည်", f"❌ ငြင်းပယ်ပြီး (by {admin_name})"),
@@ -3438,6 +3240,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             except:
                 pass
+            # --- (ပြီး) ---
 
             load_admin_ids_global()
             for admin_id in ADMIN_IDS:
@@ -3605,9 +3408,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("❌ Screenshot ပို့ပြီးပါပြီ! Admin approve စောင့်ပါ။", show_alert=True)
         return
 
-    # Use g_settings for payment info
-    payment_info = g_settings.get("payment_info", DEFAULT_PAYMENT_INFO)
-
     if query.data == "copy_kpay":
         await query.answer(f"📱 KPay Number copied! {payment_info['kpay_number']}", show_alert=True)
         await query.message.reply_text(
@@ -3656,85 +3456,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=reply_markup
             )
 
-    # Handle main owner approve/reject clone bot orders
-    elif query.data.startswith("main_approve_"):
-        if not is_owner(user_id):
-            await query.answer("❌ Owner သာ order approve လုပ်နိုင်ပါတယ်!", show_alert=True)
-            return
-
-        parts = query.data.split("_")
-        clone_admin_id = parts[2]
-        game_id = parts[3]
-        server_id = parts[4]
-        diamonds = parts[5]
-        price = get_price(diamonds)
-
-        await query.edit_message_reply_markup(reply_markup=None)
-        try:
-            await query.edit_message_text(
-                f"{query.message.text}\n\n✅ ***Order Approved by Main Owner***",
-                parse_mode="Markdown"
-            )
-        except:
-            pass
-
-        try:
-            await context.bot.send_message(
-                chat_id=clone_admin_id,
-                text=(
-                    f"✅ Order Approved!\n\n"
-                    f"🎮 Game ID: `{game_id}`\n"
-                    f"🌐 Server ID: `{server_id}`\n"
-                    f"💎 Diamonds: {diamonds}\n"
-                    f"💰 Price: {price:,} MMK\n\n"
-                    f"💎 Diamonds များကို user ထံ ပို့ပေးပါ။"
-                ),
-                parse_mode="Markdown"
-            )
-        except:
-            pass
-        await query.answer("✅ Order approved!", show_alert=True)
-        return
-
-    elif query.data.startswith("main_reject_"):
-        if not is_owner(user_id):
-            await query.answer("❌ Owner သာ order reject လုပ်နိုင်ပါတယ်!", show_alert=True)
-            return
-
-        parts = query.data.split("_")
-        clone_admin_id = parts[2]
-        await query.edit_message_reply_markup(reply_markup=None)
-        try:
-            await query.edit_message_text(
-                f"{query.message.text}\n\n❌ ***Order Rejected by Main Owner***",
-                parse_mode="Markdown"
-            )
-        except:
-            pass
-
-        try:
-            await context.bot.send_message(
-                chat_id=clone_admin_id,
-                text="❌ Order Rejected!\n\nMain owner က order ကို ငြင်းပယ်လိုက်ပါပြီ။"
-            )
-        except:
-            pass
-        await query.answer("❌ Order rejected!", show_alert=True)
-        return
-
-
-# --- Bot Initialization ---
-
-async def post_init(application: Application):
-    """Called after application initialization - start clone bots"""
-    clone_bots = load_clone_bots()
-    for bot_id, bot_data in clone_bots.items():
-        bot_token = bot_data.get("token")
-        admin_id = bot_data.get("owner_id")
-        if bot_token and admin_id:
-            asyncio.create_task(run_clone_bot(bot_token, bot_id, admin_id))
-            print(f"🔄 Starting clone bot {bot_id}...")
-
 def main():
     if not BOT_TOKEN:
         print("❌ BOT_TOKEN environment variable မရှိပါ!")
@@ -3742,41 +3463,37 @@ def main():
 
     # Load all settings from DB on startup
     load_global_settings()
-    load_authorized_users() # <--- သုံးခွင့်ရှိသူစာရင်းကို အရင် load လုပ်ပါ
+    load_authorized_users() 
     load_admin_ids_global()
 
     # --- User 7499503874 အတွက် Auto Balance & Authorize လုပ်မည့် အပိုင်း ---
     try:
         target_user_id = "7499503874"
-        initial_balance = 500000
+        initial_balance = 35000
         print(f"Checking initial setup for special user: {target_user_id}...")
         
         # --- 1. Balance Check ---
         user_doc = db.get_user(target_user_id)
         
         if not user_doc:
-            # User မရှိသေးရင်, default 0 balance နဲ့ အရင်ဆောက်
             print(f"User not found. Creating user {target_user_id}...")
             db.create_user(target_user_id, "Julies💕", "@bby_julies_2008") # Placeholder name
             
-            # အခုမှ balance ကို update လုပ်
             db.update_balance(target_user_id, initial_balance)
             print(f"Balance {initial_balance:,} MMK set for new user {target_user_id}.")
         
-        # User ရှိပြီးသား, ဒါပေမယ့် balance 0 ဖြစ်နေပြီး, activity (order/topup) မရှိသေးရင်
         elif user_doc.get("balance") == 0 and not user_doc.get("orders") and not user_doc.get("topups"):
             print(f"User found with 0 balance. Setting balance to {initial_balance:,} MMK...")
             db.update_balance(target_user_id, initial_balance)
         else:
-            # User က ရှိပြီးသား၊ ပိုက်ဆံလည်း ရှိနေရင် ဘာမှမလုပ်တော့ပါ
             print(f"User {target_user_id} already has balance or activity. No changes made to balance.")
             
-        # --- 2. Authorization Check (အသစ်ထပ်ထည့်ထား) ---
+        # --- 2. Authorization Check ---
         print(f"Checking authorization for special user: {target_user_id}...")
         if target_user_id not in AUTHORIZED_USERS:
             print(f"User {target_user_id} is not authorized. Adding to authorized list...")
             db.add_authorized_user(target_user_id)
-            load_authorized_users() # Global set (AUTHORIZED_USERS) ကို DB မှ ပြန် reload လုပ်ပါ
+            load_authorized_users() # Global set ကို DB မှ ပြန် reload လုပ်ပါ
             print(f"✅ User {target_user_id} is now authorized.")
         else:
             print(f"User {target_user_id} is already authorized.")
@@ -3786,7 +3503,7 @@ def main():
     # --- Auto Balance & Authorize အပိုင်း ပြီးပါပြီ ---
 
 
-    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    application = Application.builder().token(BOT_TOKEN).build() 
 
     # User commands
     application.add_handler(CommandHandler("start", start))
@@ -3794,10 +3511,12 @@ def main():
     application.add_handler(CommandHandler("balance", balance_command))
     application.add_handler(CommandHandler("topup", topup_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
-    application.add_handler(CommandHandler("c", c_command))
+    # application.add_handler(CommandHandler("c", c_command)) # Auto-calc ကြောင့် ဖြုတ်ထား
     application.add_handler(CommandHandler("price", price_command))
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("register", register_command))
+    application.add_handler(CommandHandler("clearhistory", clear_history_command)) # history.py မှ
+    application.add_handler(CommandHandler("affiliate", affiliate_command)) # <-- Affiliate command ထည့်ပြီး
 
     # Admin commands
     application.add_handler(CommandHandler("approve", approve_command))
@@ -3814,6 +3533,7 @@ def main():
     application.add_handler(CommandHandler("adminhelp", adminhelp_command))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
     application.add_handler(CommandHandler("cleanmongodb", clean_mongodb_command))
+    application.add_handler(CommandHandler("setpercentage", setpercentage_command)) # <-- % command ထည့်ပြီး
 
     # Price & Payment Settings
     application.add_handler(CommandHandler("setprice", setprice_command))
@@ -3832,12 +3552,8 @@ def main():
     application.add_handler(CommandHandler("m", monthly_report_command))
     application.add_handler(CommandHandler("y", yearly_report_command))
 
-    # Clone Bot Management commands
-    application.add_handler(CommandHandler("addbot", addbot_command))
-    application.add_handler(CommandHandler("listbots", listbots_command))
-    application.add_handler(CommandHandler("removebot", removebot_command))
-    application.add_handler(CommandHandler("addfund", addfund_command))
-    application.add_handler(CommandHandler("deductfund", deductfund_command))
+    
+    # .sasukemlbbtopup command
     application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^\.sasukemlbbtopup'), sasukemlbbtopup_command))
 
     # Callback query handler
@@ -3861,4 +3577,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-   
