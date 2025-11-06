@@ -411,7 +411,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "➤ /topup amount - ငွေဖြည့်မယ် (screenshot တင်ပါ)\n"
             "➤ /price - Diamond များရဲ့ ဈေးနှုန်းများ\n"
             "➤ /history - အော်ဒါမှတ်တမ်းကြည့်မယ်\n"
-            f"➤ /affiliate - {current_percentage:.0f}% Commission ရယူရန်\n\n" 
+            f"➤ /affiliate - လူရှာပြီး ကော်မရှင်ခ ရယူပါ။\n\n" 
             "***📌 ဥပမာ***:\n"
             "`/mmb 123456789 12345 wp1`\n\n"
             "***လိုအပ်တာရှိရင် Owner ကို ဆက်သွယ်နိုင်ပါတယ်။***"
