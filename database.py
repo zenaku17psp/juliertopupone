@@ -28,7 +28,7 @@ try:
     auth_collection = db["authorized_users"]
     admins_collection = db["admins"]
     settings_collection = db["settings"]
-    clone_bots_collection = db["clone_bots"]
+    # clone_bots_collection = db["clone_bots"] # <--- ဖြုတ်လိုက်ပါပြီ
 
     print("✅ MongoDB database နှင့် အောင်မြင်စွာ ချိတ်ဆက်ပြီးပါပြီ။")
 except Exception as e:
@@ -47,8 +47,8 @@ def get_all_users():
     if not client: return []
     return list(users_collection.find({}))
 
-def create_user(user_id, name, username):
-    """User အသစ်ကို database တွင် ထည့်သွင်းပါ။"""
+def create_user(user_id, name, username, referrer_id=None):
+    """User အသစ်ကို database တွင် ထည့်သွင်းပါ။ (Referral feature ပါ)"""
     if not client: return None
     user_data = {
         "user_id": str(user_id),
@@ -57,12 +57,22 @@ def create_user(user_id, name, username):
         "balance": 0,
         "orders": [],
         "topups": [],
-        "joined_at": datetime.now().isoformat()
+        "joined_at": datetime.now().isoformat(),
+        "referred_by": str(referrer_id) if referrer_id else None, # <--- အသစ်ထည့်သည်
+        "referral_earnings": 0  # <--- အသစ်ထည့်သည်
     }
     users_collection.update_one(
         {"user_id": str(user_id)},
         {"$setOnInsert": user_data},
         upsert=True
+    )
+    
+def update_user_profile(user_id, name, username):
+    """User ၏ name နှင့် username ကို update လုပ်ပါ။"""
+    if not client: return None
+    users_collection.update_one(
+        {"user_id": str(user_id)},
+        {"$set": {"name": name, "username": username}}
     )
 
 def get_balance(user_id):
@@ -77,6 +87,18 @@ def update_balance(user_id, amount_change):
         {"user_id": str(user_id)},
         {"$inc": {"balance": amount_change}}
         # upsert=True ကို ဖြုတ်လိုက်ပါ
+    )
+
+
+
+def update_referral_earnings(user_id, commission_amount):
+    if not client: return None
+    users_collection.update_one(
+        {"user_id": str(user_id)},
+        {"$inc": {
+            "balance": commission_amount, 
+            "referral_earnings": commission_amount
+        }}
     )
 
 # --- Order & Topup Functions ---
@@ -142,7 +164,7 @@ def get_user_orders(user_id, limit=999999999):
     orders = sorted(user.get("orders", []), key=lambda x: x.get('timestamp', ''), reverse=True)
     return orders[:limit]
 
-def get_user_topups(user_id, limit=9999999999):
+def get_user_topups(user_id, limit=999999999):
     user = get_user(user_id)
     if not user: return []
     # Sort descending by timestamp and get latest 5
@@ -234,13 +256,20 @@ def remove_admin(admin_id):
 
 # --- Settings Collection Functions (For Render) ---
 
-def load_settings(default_payment, default_maintenance):
+# --- Settings Collection Functions (For Render) ---
+
+def load_settings(default_payment, default_maintenance, default_affiliate): # <--- (၁) ဒီမှာ default_affiliate ထည့်ပါ
     """
     Global settings များကို DB မှ load လုပ်ပါ။
     မရှိသေးပါက default value များဖြင့် အသစ်ဆောက်ပါ။
     """
     if not client:
-        return {"payment_info": default_payment, "maintenance": default_maintenance}
+        # (၂) Default return မှာ affiliate ကို ထည့်ပါ
+        return {
+            "payment_info": default_payment, 
+            "maintenance": default_maintenance,
+            "affiliate": default_affiliate 
+        }
     
     config = settings_collection.find_one({"_id": "global_config"})
     
@@ -249,7 +278,8 @@ def load_settings(default_payment, default_maintenance):
         config = {
             "_id": "global_config",
             "payment_info": default_payment,
-            "maintenance": default_maintenance
+            "maintenance": default_maintenance,
+            "affiliate": default_affiliate # <--- (၃) Config အသစ်ဆောက်ရင် ထည့်ပါ
         }
         try:
             settings_collection.insert_one(config)
@@ -264,17 +294,28 @@ def load_settings(default_payment, default_maintenance):
         config["maintenance"] = default_maintenance
         update_setting("maintenance", default_maintenance)
     
+    # --- (၄) Affiliate setting ရှိမရှိ စစ်ဆေးပြီး မရှိရင် ထည့်ပါ (အရေးကြီး) ---
+    if "affiliate" not in config:
+        config["affiliate"] = default_affiliate
+        update_setting("affiliate", default_affiliate)
+    
     # Ensure all sub-keys exist for payment_info
     for key, value in default_payment.items():
-        if key not in config["payment_info"]:
+        if key not in config.get("payment_info", {}):
             config["payment_info"][key] = value
             update_setting(f"payment_info.{key}", value)
 
     # Ensure all sub-keys exist for maintenance
     for key, value in default_maintenance.items():
-        if key not in config["maintenance"]:
+        if key not in config.get("maintenance", {}):
             config["maintenance"][key] = value
             update_setting(f"maintenance.{key}", value)
+            
+    # Ensure all sub-keys exist for affiliate
+    for key, value in default_affiliate.items():
+        if key not in config.get("affiliate", {}):
+            config["affiliate"][key] = value
+            update_setting(f"affiliate.{key}", value)
             
     return config
 
@@ -293,48 +334,25 @@ def update_setting(key, value):
     except Exception as e:
         print(f"Failed to update setting '{key}': {e}")
 
-# --- Clone Bot DB Functions ---
-
-def load_clone_bots():
-    """DB မှ clone bot အားလုံးကို dict အဖြစ် ယူပါ။"""
-    if not client: return {}
-    bots = {}
-    for bot in clone_bots_collection.find():
-        bots[str(bot["_id"])] = bot
-    return bots
-
-def save_clone_bot(bot_id, bot_data):
-    """Clone bot data ကို DB မှာ သိမ်း/update လုပ်ပါ။"""
+def update_setting(key, value):
+    """
+    Setting တစ်ခုကို dot notation သုံးပြီး update လုပ်ပါ။
+    ဥပမာ: "payment_info.kpay_number"
+    """
     if not client: return
-    # bot_id ကို _id အဖြစ် သုံးပါမယ်
-    bot_data_with_id = bot_data.copy()
-    bot_data_with_id["_id"] = bot_id
-    clone_bots_collection.update_one(
-        {"_id": bot_id},
-        {"$set": bot_data_with_id},
-        upsert=True
-    )
+    try:
+        settings_collection.update_one(
+            {"_id": "global_config"},
+            {"$set": {key: value}},
+            upsert=True
+        )
+    except Exception as e:
+        print(f"Failed to update setting '{key}': {e}")
 
-def remove_clone_bot(bot_id):
-    """Clone bot ကို DB မှ ဖျက်ပါ။"""
-    if not client: return False
-    result = clone_bots_collection.delete_one({"_id": bot_id})
-    return result.deleted_count > 0
+# --- (Clone Bot DB Functions များကို ဖြုတ်ထားပါသည်) ---
 
-def get_clone_bot_by_admin(admin_id):
-    """Admin ID ဖြင့် clone bot ကို ရှာပါ။"""
-    if not client: return None
-    return clone_bots_collection.find_one({"owner_id": admin_id})
 
-def update_clone_bot_balance(bot_id, amount_change):
-    """Clone bot ၏ balance ကို တိုး/လျော့ ပါ။"""
-    if not client: return
-    clone_bots_collection.update_one(
-        {"_id": bot_id},
-        {"$inc": {"balance": amount_change}}
-    )
-
-# database.py (File အောက်ဆုံးမှာ ဒါကို ထပ်ထည့်ပါ)
+# --- History & Data Wipe Functions ---
 
 def clear_user_history(user_id):
     """
@@ -354,8 +372,6 @@ def clear_user_history(user_id):
         print(f"Error clearing history for {user_id}: {e}")
         return False
 
-# database.py (File အောက်ဆုံးမှာ ဒါကို ထပ်ထည့်ပါ)
-
 def wipe_all_data():
     """
     !!! အလွန်အန္တရာယ်များသော FUNCTION !!!
@@ -373,8 +389,8 @@ def wipe_all_data():
             prices_collection,
             auth_collection,
             admins_collection,
-            settings_collection,
-            clone_bots_collection
+            settings_collection
+            # clone_bots_collection <--- ဖြုတ်ထားပါသည်
         ]
         
         for collection in collections_to_wipe:
