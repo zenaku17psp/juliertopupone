@@ -2305,6 +2305,11 @@ async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Message Handlers ---
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # --- (ပြင်ဆင်ပြီး) Group Chat တွေမှာ လုံးဝ မအလုပ်လုပ်အောင် ထည့်ပါ ---
+    if not update.message or update.effective_chat.type != "private":
+        return
+    # --- (ပြီး) ---
+
     user_id = str(update.effective_user.id)
     load_authorized_users()
     if not is_user_authorized(user_id):
@@ -2446,12 +2451,16 @@ async def handle_restricted_content(update: Update, context: ContextTypes.DEFAUL
     Handle all non-command, non-photo messages.
     Checks for restricted state, then attempts calculation, then falls back to simple reply.
     """
+    # --- (ပြင်ဆင်ပြီး) update.message ရှိမှ ဆက်လုပ်ရန် ---
+    if not update.message:
+        return
+
     user_id = str(update.effective_user.id)
-    chat_type = update.effective_chat.type # <-- (အသစ်) Chat Type ကို စစ်ပါ
+    chat_type = update.effective_chat.type
 
     load_authorized_users()
     if not is_user_authorized(user_id):
-        # --- (ပြင်ဆင်ပြီး) Group ထဲမှာဆိုရင် reply မပြန်တော့ပါ ---
+        # --- (ပြင်ဆင်ပြီး) update.message.text ရှိမှ simple_reply လုပ်ရန် ---
         if update.message.text and chat_type == "private":
             reply = simple_reply(update.message.text)
             await update.message.reply_text(reply, parse_mode="Markdown")
