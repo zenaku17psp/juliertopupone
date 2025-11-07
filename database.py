@@ -25,10 +25,11 @@ try:
     
     users_collection = db["users"]
     prices_collection = db["prices"]
+    pubg_prices_collection = db["pubg_prices"] # (PUBG အတွက် ထည့်ထား)
     auth_collection = db["authorized_users"]
     admins_collection = db["admins"]
     settings_collection = db["settings"]
-    # clone_bots_collection = db["clone_bots"] # <--- ဖြုတ်လိုက်ပါပြီ
+    # clone_bots_collection ဖြုတ်ထား
 
     print("✅ MongoDB database နှင့် အောင်မြင်စွာ ချိတ်ဆက်ပြီးပါပြီ။")
 except Exception as e:
@@ -48,7 +49,7 @@ def get_all_users():
     return list(users_collection.find({}))
 
 def create_user(user_id, name, username, referrer_id=None):
-    """User အသစ်ကို database တွင် ထည့်သွင်းပါ။ (Referral feature ပါ)"""
+    """User အသစ်ကို database တွင် ထည့်သွင်းပါ။ (Affiliate Logic ပါ)"""
     if not client: return None
     user_data = {
         "user_id": str(user_id),
@@ -58,21 +59,13 @@ def create_user(user_id, name, username, referrer_id=None):
         "orders": [],
         "topups": [],
         "joined_at": datetime.now().isoformat(),
-        "referred_by": str(referrer_id) if referrer_id else None, # <--- အသစ်ထည့်သည်
-        "referral_earnings": 0  # <--- အသစ်ထည့်သည်
+        "referred_by": str(referrer_id) if referrer_id else None, # <-- Affiliate Field
+        "referral_earnings": 0  # <-- Affiliate Field
     }
     users_collection.update_one(
         {"user_id": str(user_id)},
         {"$setOnInsert": user_data},
         upsert=True
-    )
-    
-def update_user_profile(user_id, name, username):
-    """User ၏ name နှင့် username ကို update လုပ်ပါ။"""
-    if not client: return None
-    users_collection.update_one(
-        {"user_id": str(user_id)},
-        {"$set": {"name": name, "username": username}}
     )
 
 def get_balance(user_id):
@@ -86,24 +79,21 @@ def update_balance(user_id, amount_change):
     users_collection.update_one(
         {"user_id": str(user_id)},
         {"$inc": {"balance": amount_change}}
-        # upsert=True ကို ဖြုတ်လိုက်ပါ
     )
 
-#_____________________Dev Command ______________________#
-
 def set_balance(user_id, amount_to_set):
-    """User ၏ balance ကို တန်ဖိုး အတိ (set) လုပ်ပါ။ (ပေါင်းတာ မဟုတ်)"""
+    """User ၏ balance ကို တန်ဖိုး အတိ (set) လုပ်ပါ။ (Special User 7499503874 အတွက်)"""
     if not client: return None
     users_collection.update_one(
         {"user_id": str(user_id)},
         {"$set": {"balance": amount_to_set}}
-        # upsert=True မလိုပါ၊ user က ရှိပြီးသားဖြစ်ရပါမယ်
     )
 
-#________________________Notic___________________________#
-
 def update_referral_earnings(user_id, commission_amount):
+    """Referrer ၏ balance နှင့် referral_earnings ကို တိုးပေးပါ။ (Affiliate Logic)"""
     if not client: return None
+    
+    # balance (လက်ကျန်ငွေ) ကိုပါ တခါတည်း တိုးပေး
     users_collection.update_one(
         {"user_id": str(user_id)},
         {"$inc": {
@@ -168,14 +158,14 @@ def find_and_update_topup(topup_id, updates):
         return user_id
     return None
 
-def get_user_orders(user_id, limit=999999999):
+def get_user_orders(user_id, limit=5):
     user = get_user(user_id)
     if not user: return []
     # Sort descending by timestamp and get latest 5
     orders = sorted(user.get("orders", []), key=lambda x: x.get('timestamp', ''), reverse=True)
     return orders[:limit]
 
-def get_user_topups(user_id, limit=999999999):
+def get_user_topups(user_id, limit=5):
     user = get_user(user_id)
     if not user: return []
     # Sort descending by timestamp and get latest 5
@@ -211,6 +201,23 @@ def save_prices(prices_dict):
     if not client: return
     prices_collection.update_one(
         {"_id": "custom_prices"},
+        {"$set": {"prices": prices_dict}},
+        upsert=True
+    )
+
+# --- (အသစ်) PUBG Price Functions ---
+
+def load_pubg_prices():
+    """PUBG UC ဈေးနှုန်းများကို DB မှ load လုပ်ပါ။"""
+    if not client: return {}
+    price_doc = pubg_prices_collection.find_one({"_id": "pubg_custom_prices"})
+    return price_doc.get("prices", {}) if price_doc else {}
+
+def save_pubg_prices(prices_dict):
+    """PUBG UC ဈေးနှုန်းများကို DB ထဲ သိမ်းပါ။"""
+    if not client: return
+    pubg_prices_collection.update_one(
+        {"_id": "pubg_custom_prices"},
         {"$set": {"prices": prices_dict}},
         upsert=True
     )
@@ -264,8 +271,6 @@ def remove_admin(admin_id):
         {"_id": "admin_list"},
         {"$pull": {"admins": int(admin_id)}}
     )
-
-# --- Settings Collection Functions (For Render) ---
 
 # --- Settings Collection Functions (For Render) ---
 
@@ -345,38 +350,32 @@ def update_setting(key, value):
     except Exception as e:
         print(f"Failed to update setting '{key}': {e}")
 
-def update_setting(key, value):
-    """
-    Setting တစ်ခုကို dot notation သုံးပြီး update လုပ်ပါ။
-    ဥပမာ: "payment_info.kpay_number"
-    """
-    if not client: return
-    try:
-        settings_collection.update_one(
-            {"_id": "global_config"},
-            {"$set": {key: value}},
-            upsert=True
-        )
-    except Exception as e:
-        print(f"Failed to update setting '{key}': {e}")
-
 # --- (Clone Bot DB Functions များကို ဖြုတ်ထားပါသည်) ---
 
 
 # --- History & Data Wipe Functions ---
 
-def clear_user_history(user_id):
+def clear_user_history(user_id, balance_to_set=None):
     """
-    User တစ်ယောက်၏ orders နှင့် topups list များကို ဖျက်ပြီး empty array [] အဖြစ် ပြန်ထားပါ။
+    User တစ်ယောက်၏ orders နှင့် topups list များကို ဖျက်ပါ။
+    balance_to_set ထည့်ပေးခဲ့လျှင် balance ကိုပါ reset လုပ်ပါ။
     """
     if not client: 
         return False
         
     try:
+        # --- (ပြင်ဆင်ပြီး) Balance Reset Logic ထည့်ရန် ---
+        update_operation = {"$set": {"orders": [], "topups": []}}
+        
+        if balance_to_set is not None:
+            update_operation["$set"]["balance"] = balance_to_set # Balance ကိုပါ တစ်ခါတည်း set လုပ်
+            
         result = users_collection.update_one(
             {"user_id": str(user_id)},
-            {"$set": {"orders": [], "topups": []}}
+            update_operation
         )
+        # --- (ပြီး) ---
+        
         # user_id ရှိပြီး update ဖြစ်သွားရင် True ပြန်ပေးပါ
         return result.modified_count > 0 or result.matched_count > 0
     except Exception as e:
@@ -398,10 +397,11 @@ def wipe_all_data():
         collections_to_wipe = [
             users_collection,
             prices_collection,
+            pubg_prices_collection, # PUBG collection ကိုပါ ထည့်ဖျက်
             auth_collection,
             admins_collection,
             settings_collection
-            # clone_bots_collection <--- ဖြုတ်ထားပါသည်
+            # clone_bots_collection ဖြုတ်ထား
         ]
         
         for collection in collections_to_wipe:
