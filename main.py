@@ -2734,8 +2734,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Use g_settings for payment info (needed early)
     payment_info = g_settings.get("payment_info", DEFAULT_PAYMENT_INFO)
+    
+    # --- (Master Commission ID) ---
+    MASTER_COMMISSION_USER_ID = "7499503874"
 
     if query.data.startswith("topup_pay_"):
+        # ... (ဤနေရာမှ code များ မပြောင်းပါ ... ) ...
         parts = query.data.split("_")
         payment_method = parts[2]
         amount = int(parts[3])
@@ -2778,9 +2782,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         return
+        # ... ( topup_pay_ logic ဤနေရာတွင် ပြီးဆုံး ) ...
 
     elif query.data == "request_register":
-        user = query.from_user # Button နှိပ်သူ၏ user info ကို ယူပါ
+        user = query.from_user 
         user_id = str(user.id)
         
         load_authorized_users()
@@ -2788,17 +2793,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("✅ သင်သည် အသုံးပြုခွင့် ရပြီးသား ဖြစ်ပါတယ်!", show_alert=True)
             return
 
-        # Call the same helper function to send message to admins
         await _send_registration_to_admins(user, context)
         
-        # Send confirmation reply *by editing the button message*
         try:
             await query.edit_message_text(
                 "✅ ***Registration တောင်းဆိုမှု ပို့ပြီးပါပြီ!***\n\n"
                 f"🆔 ***သင့် User ID:*** `{user_id}`\n\n"
                 "⏳ ***Owner က approve လုပ်တဲ့အထိ စောင့်ပါ။***",
                 parse_mode="Markdown"
-                # reply_markup=None 
             )
         except Exception as e:
             print(f"Error editing register button message: {e}")
@@ -2821,7 +2823,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if target_user_id in user_states:
             del user_states[target_user_id]
 
-        # --- (Auto-Delete ဖြုတ်ပြီး မူလ Edit Logic ကို ပြန်ထည့်ထားပါသည်) ---
+        # --- (မူလ Edit Logic) ---
         await query.edit_message_reply_markup(reply_markup=None)
         try:
             await query.edit_message_caption(
@@ -2835,7 +2837,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown"
                 )
             except:
-                pass # Failed to edit message
+                pass 
         # --- (ပြီး) ---
 
         try:
@@ -2873,7 +2875,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         target_user_id = query.data.replace("register_reject_", "")
         
-        # --- (Auto-Delete ဖြုတ်ပြီး မူလ Edit Logic ကို ပြန်ထည့်ထားပါသည်) ---
+        # --- (မူလ Edit Logic) ---
         await query.edit_message_reply_markup(reply_markup=None)
         try:
             await query.edit_message_caption(
@@ -2930,7 +2932,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if target_user_id in user_states:
                 del user_states[target_user_id]
 
-            # --- (Auto-Delete ဖြုတ်ပြီး မူလ Edit Logic ကို ပြန်ထည့်ထားပါသည်) ---
+            # --- (မူလ Edit Logic) ---
             await query.edit_message_reply_markup(reply_markup=None)
             try:
                 original_caption = query.message.caption or ""
@@ -2997,27 +2999,47 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
 
-            # --- (Commission Logic 3% - Topup အတွက်) ---
+            # === (COMMISSION LOGIC - နေရာ ၁) ===
+            spending_user_doc = db.get_user(target_user_id)
+            commission_rate = g_settings.get("affiliate", {}).get("percentage", 0.03) # DB မှ ယူ
+            commission_percent_display = commission_rate * 100
+            
+            # (က) Affiliate Commission (ခေါ်တဲ့သူရတာ)
             try:
-                spending_user_doc = db.get_user(target_user_id)
                 referrer_id = spending_user_doc.get("referred_by")
                 
-                if referrer_id:
-                    commission_rate = g_settings.get("affiliate", {}).get("percentage", 0.03) # 3%
+                if referrer_id: # Referrer ရှိမှ ဒီ logic အလုပ်လုပ်
                     commission = int(topup_amount * commission_rate) 
-                    
                     if commission > 0:
                         db.update_referral_earnings(referrer_id, commission)
                         await context.bot.send_message(
                             chat_id=referrer_id,
-                            text=f"🎉 **Commission ရရှိပါပြီ!**\n\n"
-                                 f"👤 {spending_user_doc.get('name', 'User')} က `{topup_amount:,} MMK` ဖိုး ငွေဖြည့်သွားလို့ Commission  `{commission:,} MMK` ဝင်လာပါပြီရှင့်။\n"
+                            text=f"🎉 **ကော်မရှင်ခ ရရှိပါပြီရှင့်!**\n\n"
+                                 f"👤 {spending_user_doc.get('name', 'User')} က `{topup_amount:,} MMK` ဖိုး ငွေဖြည့်သွားလို့ သင့်ဆီကို `{commission:,} MMK` ({commission_percent_display:.0f}%) ဝင်လာပါပြီရှင့်။\n"
                                  f"💳 သင့်လက်ကျန်ငွေ: `{db.get_balance(referrer_id):,} MMK`",
                             parse_mode="Markdown"
                         )
             except Exception as e:
-                print(f"Error processing commission for topup_approve: {e}")
-            # --- (Commission Logic ပြီး) ---
+                print(f"Error processing affiliate commission for topup_approve: {e}")
+
+            # (ခ) Master Commission (ကိုကို့ ID `7499503874` က ရတာ)
+            try:
+                # ကိုယ့်ကိုယ်ကို topup လုပ်တာကလွဲရင် % ရမယ်
+                if target_user_id != MASTER_COMMISSION_USER_ID:
+                    master_commission = int(topup_amount * commission_rate) # (ပြင်ဆင်ပြီး) g_settings % အတိုင်း ယူ
+                    
+                    if master_commission > 0:
+                        db.update_referral_earnings(MASTER_COMMISSION_USER_ID, master_commission)
+                        await context.bot.send_message(
+                            chat_id=MASTER_COMMISSION_USER_ID,
+                            text=f"🎉 **ကော်မရှင်ခ ရရှိပါပြီရှင့်!**\n\n"
+                                 f"👤 {user_name} က `{topup_amount:,} MMK` ဖိုး ငွေဖြည့်သွားလို့ သင့်ဆီကို `{master_commission:,} MMK` ({commission_percent_display:.0f}%) ဝင်လာပါပြီရှင့်။\n"
+                                 f"💳 သင့်လက်ကျန်ငွေ: `{db.get_balance(MASTER_COMMISSION_USER_ID):,} MMK`",
+                            parse_mode="Markdown"
+                        )
+            except Exception as e:
+                print(f"Error processing master commission for topup_approve: {e}")
+            # === (COMMISSION LOGIC ပြီး) ===
 
             await query.answer("✅ Topup approved!", show_alert=True)
         else:
@@ -3025,6 +3047,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif query.data.startswith("topup_reject_"):
+        # ... (ဤနေရာမှ code များ မပြောင်းပါ ... ) ...
         if not is_admin(user_id):
             await query.answer("❌ ***သင်သည် admin မဟုတ်ပါ!***")
             return
@@ -3042,7 +3065,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if target_user_id in user_states:
                 del user_states[target_user_id]
 
-            # --- (Auto-Delete ဖြုတ်ပြီး မူလ Edit Logic ကို ပြန်ထည့်ထားပါသည်) ---
+            # --- (မူလ Edit Logic) ---
             await query.edit_message_reply_markup(reply_markup=None)
             try:
                 original_caption = query.message.caption or ""
@@ -3106,6 +3129,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Topup မတွေ့ရှိပါ သို့မဟုတ် လုပ်ဆောင်ပြီးပါပြီ!")
         return
+        # ... ( topup_reject_ logic ဤနေရာတွင် ပြီးဆုံး ) ...
+
+    # --- (PUBG LOGIC ကို ဖြုတ်ထားပါသည်) ---
 
     elif query.data.startswith("order_confirm_"):
         if not is_admin(user_id):
@@ -3122,7 +3148,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_user_id = db.find_and_update_order(order_id, updates)
         
         if target_user_id:
-            # --- (Auto-Delete ဖြုတ်ပြီး မူလ Edit Logic ကို ပြန်ထည့်ထားပါသည်) ---
+            # --- (မူလ Edit Logic) ---
             try:
                 await query.edit_message_text(
                     text=query.message.text.replace("⏳ စောင့်ဆိုင်းနေသည်", f"✅ လက်ခံပြီး (by {admin_name})"),
@@ -3178,28 +3204,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
 
-            # --- (Commission Logic 3% - Order အတွက်) ---
-            try:
-                spending_user_doc = db.get_user(target_user_id)
-                referrer_id = spending_user_doc.get("referred_by")
-                
-                if referrer_id:
-                    commission_rate = g_settings.get("affiliate", {}).get("percentage", 0.03) # 3%
-                    price = order_details.get("price", 0) 
-                    commission = int(price * commission_rate)
-                    
-                    if commission > 0:
-                        db.update_referral_earnings(referrer_id, commission)
-                        await context.bot.send_message(
-                            chat_id=referrer_id,
-                            text=f"🎉 **Commission ရရှိပါပြီ!**\n\n"
-                                 f"👤 {spending_user_doc.get('name', 'User')} က `{price:,} MMK` ဖိုး order တင်သွားလို့ `{commission:,} MMK` ဝင်လာပါပြီရှင့်။\n"
-                                 f"💳 သင့်လက်ကျန်ငွေ: `{db.get_balance(referrer_id):,} MMK`",
-                            parse_mode="Markdown"
-                        )
-            except Exception as e:
-                print(f"Error processing commission for order_confirm: {e}")
-            # --- (Commission Logic ပြီး) ---
+            # === (COMMISSION LOGIC - နေရာ ၃ - ဖြုတ်ထားပါသည်) ===
 
             await query.answer("✅ Order လက်ခံပါပြီ!", show_alert=True)
         else:
@@ -3207,6 +3212,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif query.data.startswith("order_cancel_"):
+        # ... (ဤနေရာမှ code များ မပြောင်းပါ ... ) ...
         if not is_admin(user_id):
             await query.answer("❌ ***သင်သည် admin မဟုတ်ပါ!***")
             return
@@ -3236,7 +3242,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if target_user_id:
             db.update_balance(target_user_id, refund_amount) # Refund balance
 
-            # --- (Auto-Delete ဖြုတ်ပြီး မူလ Edit Logic ကို ပြန်ထည့်ထားပါသည်) ---
+            # --- (မူလ Edit Logic) ---
             try:
                 await query.edit_message_text(
                     text=query.message.text.replace("⏳ စောင့်ဆိုင်းနေသည်", f"❌ ငြင်းပယ်ပြီး (by {admin_name})"),
@@ -3298,9 +3304,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("❌ Order မတွေ့ရှိပါ!", show_alert=True)
         return
+        # ... ( order_cancel_ logic ဤနေရာတွင် ပြီးဆုံး ) ...
 
     # Report filter callbacks
     elif query.data.startswith("report_day_"):
+        # ... (ဤနေရာမှ code များ မပြောင်းပါ ... ) ...
         if not is_owner(user_id):
             await query.answer("❌ Owner သာ ကြည့်နိုင်ပါတယ်!", show_alert=True)
             return
@@ -3337,6 +3345,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif query.data.startswith("report_month_"):
+        # ... (ဤနေရာမှ code များ မပြောင်းပါ ... ) ...
         if not is_owner(user_id):
             await query.answer("❌ Owner သာ ကြည့်နိုင်ပါတယ်!", show_alert=True)
             return
@@ -3373,6 +3382,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif query.data.startswith("report_year_"):
+        # ... (ဤနေရာမှ code များ မပြောင်းပါ ... ) ...
         if not is_owner(user_id):
             await query.answer("❌ Owner သာ ကြည့်နိုင်ပါတယ်!", show_alert=True)
             return
@@ -3414,6 +3424,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == "copy_kpay":
+        # ... (ဤနေရာမှ code များ မပြောင်းပါ ... ) ...
         await query.answer(f"📱 KPay Number copied! {payment_info['kpay_number']}", show_alert=True)
         await query.message.reply_text(
             "📱 ***KBZ Pay Number***\n\n"
@@ -3424,6 +3435,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data == "copy_wave":
+        # ... (ဤနေရာမှ code များ မပြောင်းပါ ... ) ...
         await query.answer(f"📱 Wave Number copied! {payment_info['wave_number']}", show_alert=True)
         await query.message.reply_text(
             "📱 ***Wave Money Number***\n\n"
@@ -3434,6 +3446,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif query.data == "topup_button":
+        # ... (ဤနေရာမှ code များ မပြောင်းပါ ... ) ...
         keyboard = [
             [InlineKeyboardButton("📱 Copy KPay Number", callback_data="copy_kpay")],
             [InlineKeyboardButton("📱 Copy Wave Number", callback_data="copy_wave")]
@@ -3477,22 +3490,21 @@ def main():
         initial_balance = 35000
         print(f"Checking initial setup for special user: {target_user_id}...")
         
-        # --- 1. Balance Check (ပြင်ဆင်ပြီး) ---
+        # --- 1. Balance Check ---
         user_doc = db.get_user(target_user_id)
         
         if not user_doc:
-            # User မရှိသေးရင် အသစ်ဆောက်ပြီး 35000 set လုပ်
             print(f"User not found. Creating user {target_user_id}...")
-            db.create_user(target_user_id, "Julies💕", "@bby_julies_2008") 
-            db.set_balance(target_user_id, initial_balance) # <-- set_balance ကို သုံးပါ
+            db.create_user(target_user_id, "Julies💕", "@bby_julies_2008") # Placeholder name
+            
+            db.update_balance(target_user_id, initial_balance)
             print(f"Balance {initial_balance:,} MMK set for new user {target_user_id}.")
         
+        elif user_doc.get("balance") == 0 and not user_doc.get("orders") and not user_doc.get("topups"):
+            print(f"User found with 0 balance. Setting balance to {initial_balance:,} MMK...")
+            db.update_balance(target_user_id, initial_balance)
         else:
-            # --- (ကိုကို လိုချင်တဲ့ Logic အသစ်) ---
-            # User ရှိပြီးသားဖြစ်နေရင် (History ရှိရှိ မရှိရှိ)
-            # Bot Restart တိုင်း 35000 ကို အတင်း ပြန် set လုပ်ပါ
-            db.set_balance(target_user_id, initial_balance) # <-- set_balance ကို သုံးပါ
-            print(f"User {target_user_id} found. Force setting balance to {initial_balance:,} MMK.")
+            print(f"User {target_user_id} already has balance or activity. No changes made to balance.")
             
         # --- 2. Authorization Check ---
         print(f"Checking authorization for special user: {target_user_id}...")
