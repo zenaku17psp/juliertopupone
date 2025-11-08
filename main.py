@@ -74,7 +74,7 @@ DEFAULT_AFFILIATE = {
 }
 
 DEFAULT_AUTO_DELETE = {
-    "enabled": False, # True ဆိုရင် auto ဖျက်မယ်
+    "enabled": True, # True ဆိုရင် auto ဖျက်မယ်
     "hours": 24       # 24 နာရီ (1 Day)
 }
 
@@ -199,10 +199,10 @@ def validate_game_id(game_id):
 #__________________PUBG ID FUNCTION__________________________________#
 
 def validate_pubg_id(player_id):
-    """Validate PUBG Player ID (7-10 digits)"""
+    """Validate PUBG Player ID (7-11 digits)"""
     if not player_id.isdigit():
         return False
-    if len(player_id) < 7 or len(player_id) > 10:
+    if len(player_id) < 7 or len(player_id) > 11:
         return False
     return True
 
@@ -715,7 +715,7 @@ async def pubg_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not validate_pubg_id(player_id):
         await update.message.reply_text(
-            "❌ ***PUBG Player ID မှားနေပါတယ်!*** (ဂဏန်း 7-10 လုံး)\n\n"
+            "❌ ***PUBG Player ID မှားနေပါတယ်!*** (ဂဏန်း 7-11 လုံး)\n\n"
             "***ဥပမာ***: `123456789`",
             parse_mode="Markdown"
         )
@@ -1073,6 +1073,57 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "***ဥပမာ***:\n"
         "`/mmb 123456789 12345 wp1`\n"
         "`/mmb 123456789 12345 86`"
+    )
+
+    await update.message.reply_text(price_msg, parse_mode="Markdown")
+
+async def pubg_price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(User) PUBG UC ဈေးနှုန်းများကို ကြည့်ပါ။"""
+    user_id = str(update.effective_user.id)
+
+    load_authorized_users()
+    if not is_user_authorized(user_id):
+        await update.message.reply_text("🚫 အသုံးပြုခွင့် မရှိပါ!\n\n/start နှိပ်ပြီး Register လုပ်ပါ။")
+        return
+
+    if user_id in user_states and user_states[user_id] == "waiting_approval":
+        await update.message.reply_text(
+            "⏳ ***Screenshot ပို့ပြီးပါပြီ!***\n\n"
+            "❌ ***Admin approve မလုပ်မချင်း commands တွေ သုံးလို့မရပါ။***",
+            parse_mode="Markdown"
+        )
+        return
+
+    if user_id in pending_topups:
+        await update.message.reply_text(
+            "⏳ ***Topup လုပ်ငန်းစဉ် ဆက်လက်လုပ်ဆောင်ပါ!***\n\n"
+            "❌ ***လက်ရှိ topup လုပ်ငန်းစဉ်ကို မပြီးသေးပါ။***",
+            parse_mode="Markdown"
+        )
+        return
+
+    custom_prices = db.load_pubg_prices() # From DB
+
+    default_prices = {
+        "60uc": 1500, "325uc": 7500, "660uc": 15000,
+        "1800uc": 37500, "3850uc": 75000, "8100uc": 150000
+    }
+
+    current_prices = {**default_prices, **custom_prices}
+    price_msg = "💎 ***PUBG UC ဈေးနှုန်းများ***\n\n"
+
+    # Sort keys (60, 325, 660, ...)
+    sorted_keys = sorted(current_prices.keys(), key=lambda x: int(re.sub(r'\D', '', x)))
+
+    for uc in sorted_keys:
+        price_msg += f"• {uc} = {current_prices[uc]:,} MMK\n"
+    
+    price_msg += "\n"
+    price_msg += (
+        "***📝 အသုံးပြုနည်း***:\n"
+        "`/pubg <player_id> <amount>`\n\n"
+        "***ဥပမာ***:\n"
+        "`/pubg 12345678 60uc`"
     )
 
     await update.message.reply_text(price_msg, parse_mode="Markdown")
@@ -2080,38 +2131,57 @@ async def removeprice_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 #__________________PUBG remove price FUNCTION__________________________________#
 
 async def setpubgprice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """(Admin Only) PUBG UC ဈေးနှုန်း သတ်မှတ်ပါ။"""
+    """(Admin Only) PUBG UC ဈေးနှုန်း သတ်မှတ်ပါ။ (Batch update နိုင်သည်)"""
     user_id = str(update.effective_user.id)
     if not is_admin(user_id):
         await update.message.reply_text("❌ သင်သည် admin မဟုတ်ပါ!")
         return
 
     args = context.args
-    if len(args) != 2:
+    
+    # --- (ပြင်ဆင်ပြီး) Batch Update Logic ---
+    if len(args) < 2 or len(args) % 2 != 0:
         await update.message.reply_text(
-            "❌ ***မှန်ကန်တဲ့အတိုင်း***: `/setpubgprice <amount> <price>`\n"
-            "***ဥပမာ***: `/setpubgprice 60uc 1500`",
+            "❌ ***Format မှားနေပါသည်!***\n\n"
+            "***တစ်ခုချင်း:***\n"
+            "`/setpubgprice 60uc 1500`\n\n"
+            "***အများကြီး:***\n"
+            "`/setpubgprice 60uc 1500 325uc 7500`",
             parse_mode="Markdown"
         )
         return
 
-    item = args[0].lower() # 60uc
+    custom_prices = db.load_pubg_prices()
+    updated_items = []
+    
     try:
-        price = int(args[1])
+        # Argument တွေကို (၂) ခု တစ်တွဲ ယူပါ (item, price)
+        for i in range(0, len(args), 2):
+            item = args[i].lower()
+            price = int(args[i+1])
+            
+            if price < 0:
+                await update.message.reply_text(f"❌ ဈေးနှုန်း ({item}) သုညထက် ကြီးရမည်!")
+                return
+                
+            custom_prices[item] = price
+            updated_items.append(f"• {item} = {price:,} MMK")
+            
     except ValueError:
-        await update.message.reply_text("❌ ဈေးနှုန်း ကိန်းဂဏန်းဖြင့် ထည့်ပါ!")
+        await update.message.reply_text("❌ ဈေးနှုန်းများ ကိန်းဂဏန်းဖြင့် ထည့်ပါ!")
+        return
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
         return
 
-    custom_prices = db.load_pubg_prices()
-    custom_prices[item] = price
     db.save_pubg_prices(custom_prices) # DB function အသစ်ကို ခေါ်ပါ
 
     await update.message.reply_text(
         f"✅ ***PUBG ဈေးနှုန်း ပြောင်းလဲပါပြီ!***\n\n"
-        f"💎 Item: `{item}`\n"
-        f"💰 New Price: `{price:,} MMK`",
+        + "\n".join(updated_items),
         parse_mode="Markdown"
     )
+    # --- (ပြီး) ---
 
 async def removepubgprice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """(Admin Only) PUBG UC ဈေးနှုန်း ဖျက်ပါ။"""
@@ -4162,19 +4232,6 @@ def main():
             
     except Exception as e:
         print(f"Error during special user init: {e}")
-            
-        # --- 2. Authorization Check ---
-        print(f"Checking authorization for special user: {target_user_id}...")
-        if target_user_id not in AUTHORIZED_USERS:
-            print(f"User {target_user_id} is not authorized. Adding to authorized list...")
-            db.add_authorized_user(target_user_id)
-            load_authorized_users() # Global set ကို DB မှ ပြန် reload လုပ်ပါ
-            print(f"✅ User {target_user_id} is now authorized.")
-        else:
-            print(f"User {target_user_id} is already authorized.")
-            
-    except Exception as e:
-        print(f"Error during special user init: {e}")
     # --- Auto Balance & Authorize အပိုင်း ပြီးပါပြီ ---
 
     application = Application.builder().token(BOT_TOKEN).build()
@@ -4194,6 +4251,7 @@ def main():
     application.add_handler(CommandHandler("cancel", cancel_command))
     # application.add_handler(CommandHandler("c", c_command)) # Auto-calc ကြောင့် ဖြုတ်ထား
     application.add_handler(CommandHandler("price", price_command))
+    application.add_handler(CommandHandler("pubgprice", pubg_price_command))
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("register", register_command))
     application.add_handler(CommandHandler("clearhistory", clear_history_command)) # history.py မှ
