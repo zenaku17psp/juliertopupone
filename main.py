@@ -70,7 +70,12 @@ DEFAULT_PAYMENT_INFO = {
 
 # --- (အသစ်) Affiliate Default Setting ---
 DEFAULT_AFFILIATE = {
-    "percentage": 0.03  # 3%
+    "percentage": 0.01  # 1%
+}
+
+DEFAULT_AUTO_DELETE = {
+    "enabled": False, # True ဆိုရင် auto ဖျက်မယ်
+    "hours": 24       # 24 နာရီ (1 Day)
 }
 
 # Global Settings Variable (Bot စတက်လျှင် DB မှ load လုပ်မည်)
@@ -87,8 +92,8 @@ def load_global_settings():
     Database မှ settings များကို g_settings global variable ထဲသို့ load လုပ်ပါ။
     """
     global g_settings
-    # --- (ပြင်ဆင်ပြီး) Affiliate Setting ကိုပါ load လုပ်ရန် ---
-    g_settings = db.load_settings(DEFAULT_PAYMENT_INFO, DEFAULT_MAINTENANCE, DEFAULT_AFFILIATE)
+    # --- (ပြင်ဆင်ပြီး) Auto Delete Setting ကိုပါ load လုပ်ရန် ---
+    g_settings = db.load_settings(DEFAULT_PAYMENT_INFO, DEFAULT_MAINTENANCE, DEFAULT_AFFILIATE, DEFAULT_AUTO_DELETE)
     print("✅ Global settings loaded from MongoDB.")
     
     # (Affiliate setting မရှိသေးရင် default ထည့်ပေးပါ)
@@ -98,6 +103,11 @@ def load_global_settings():
     elif "percentage" not in g_settings["affiliate"]:
         g_settings["affiliate"]["percentage"] = DEFAULT_AFFILIATE["percentage"]
         db.update_setting("affiliate.percentage", DEFAULT_AFFILIATE["percentage"])
+        
+    # --- (အသစ်) Auto Delete setting မရှိသေးရင် default ထည့်ပေးပါ ---
+    if "auto_delete" not in g_settings:
+        g_settings["auto_delete"] = DEFAULT_AUTO_DELETE
+        db.update_setting("auto_delete", DEFAULT_AUTO_DELETE)
     # --- (ပြီး) ---
 
 
@@ -145,7 +155,7 @@ def simple_reply(message_text):
 
     # Greetings
     if any(word in message_lower for word in ["hello", "hi", "မင်္ဂလာပါ", "ဟယ်လို", "ဟိုင်း", "ကောင်းလား"]):
-        return ("👋 မင်္ဂလာပါ! 𝙅𝘽 𝙈𝙇𝘽𝘽 𝘼𝙐𝙏𝙊 𝙏𝙊𝙋 𝙐𝙋 𝘽𝙊𝙏 မှ ကြိုဆိုပါတယ်!\n\n"
+        return ("👋 မင်္ဂလာပါ!  𝙅𝘽 𝙈𝙇𝘽𝘽 𝘼𝙐𝙏𝙊 𝙏𝙊𝙋 𝙐𝙋 𝘽𝙊𝙏 မှ ကြိုဆိုပါတယ်!\n\n"
                 "📱 Bot commands များ သုံးရန် /start နှိပ်ပါ\n")
 
 
@@ -186,6 +196,34 @@ def validate_game_id(game_id):
     if len(game_id) < 6 or len(game_id) > 10:
         return False
     return True
+#__________________PUBG ID FUNCTION__________________________________#
+
+def validate_pubg_id(player_id):
+    """Validate PUBG Player ID (7-11 digits)"""
+    if not player_id.isdigit():
+        return False
+    if len(player_id) < 7 or len(player_id) > 11:
+        return False
+    return True
+
+def get_pubg_price(uc_amount):
+    """PUBG UC အတွက် ဈေးနှုန်းကို ရှာပါ။"""
+    custom_prices = db.load_pubg_prices() # DB function အသစ်ကို ခေါ်ပါ
+    if uc_amount in custom_prices:
+        return custom_prices[uc_amount]
+
+    # (Default ဈေးနှုန်းများ - ကိုကို ကြိုက်သလို ဒီမှာ ပြင်နိုင်ပါတယ်)
+    table = {
+        "60uc": 1500,
+        "325uc": 7500,
+        "660uc": 15000,
+        "1800uc": 37500,
+        "3850uc": 75000,
+        "8100uc": 150000,
+    }
+    return table.get(uc_amount)
+
+#__________________PUBG ID FUNCTION__________________________________#
 
 def validate_server_id(server_id):
     """Validate MLBB Server ID (3-5 digits)"""
@@ -404,7 +442,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
             f"👋 ***မင်္ဂလာပါ*** {clickable_name}!\n"
             f"🆔 ***Telegram User ID:*** `{user_id}`\n\n"
-            "💎 ***𝙅𝘽 𝙈𝙇𝘽𝘽 𝘼𝙐𝙏𝙊 𝙏𝙊𝙋 𝙐𝙋 𝘽𝙊𝙏*** မှ ကြိုဆိုပါတယ်။\n\n"
+            "💎 *** 𝙅𝘽 𝙈𝙇𝘽𝘽 𝘼𝙐𝙏𝙊 𝙏𝙊𝙋 𝙐𝙋 𝘽𝙊𝙏*** မှ ကြိုဆိုပါတယ်။\n\n"
             "***အသုံးပြုနိုင်တဲ့ command များ***:\n"
             "➤ /mmb gameid serverid amount\n"
             "➤ /balance - ဘယ်လောက်လက်ကျန်ရှိလဲ စစ်မယ်\n"
@@ -616,7 +654,9 @@ async def mmb_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📊 ***Status:*** ⏳ စောင့်ဆိုင်းနေသည်\n\n"
                 f"#NewOrder"
             )
-            await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+            msg_obj = await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+            
+            db.add_message_to_delete_queue(msg_obj.message_id, msg_obj.chat_id, datetime.now().isoformat())
     except Exception as e:
         print(f"Error sending to admin group in mmb_command: {e}")
         pass
@@ -634,6 +674,143 @@ async def mmb_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚠️ ***Admin က confirm လုပ်ပြီးမှ diamonds များ ရရှိပါမယ်။***",
         parse_mode="Markdown"
     )
+
+#__________________PUBG price FUNCTION__________________________________#
+
+async def pubg_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    user_doc = db.get_user(user_id) 
+
+    load_authorized_users()
+    if not is_user_authorized(user_id):
+        await update.message.reply_text("🚫 အသုံးပြုခွင့် မရှိပါ!\n\n/start နှိပ်ပြီး Register လုပ်ပါ။")
+        return
+
+    if not await check_maintenance_mode("orders"):
+        await send_maintenance_message(update, "orders")
+        return
+
+    if user_id in user_states and user_states[user_id] == "waiting_approval":
+        await update.message.reply_text("⏳ ***Screenshot ပို့ပြီးပါပြီ!***\n\n❌ ***Admin approve မလုပ်မချင်း Order အသစ် တင်လို့မရပါ။***", parse_mode="Markdown")
+        return
+
+    if await check_pending_topup(user_id):
+        await send_pending_topup_warning(update)
+        return
+
+    args = context.args
+    if len(args) != 2:
+        await update.message.reply_text(
+            "❌ ***အမှားရှိပါတယ်!***\n\n"
+            "***မှန်ကန်တဲ့ format***:\n"
+            "`/pubg <player_id> <amount>`\n\n"
+            "***ဥပမာ***:\n"
+            "`/pubg 123456789 60uc`",
+            parse_mode="Markdown"
+        )
+        return
+
+    player_id, amount = args
+    amount = amount.lower() # 60UC လို့ ရိုက်လည်း 60uc ဖြစ်အောင်
+
+    if not validate_pubg_id(player_id):
+        await update.message.reply_text(
+            "❌ ***PUBG Player ID မှားနေပါတယ်!*** (ဂဏန်း 7-11 လုံး)\n\n"
+            "***ဥပမာ***: `123456789`",
+            parse_mode="Markdown"
+        )
+        return
+
+    price = get_pubg_price(amount)
+    if not price:
+        await update.message.reply_text(
+            f"❌ ***UC Amount မှားနေပါတယ်!***\n\n"
+            f"`{amount}` ဆိုတာ မရောင်းပါဘူးရှင့်။ ဥပမာ: `60uc`",
+            parse_mode="Markdown"
+        )
+        return
+
+    user_balance = user_doc.get("balance", 0)
+
+    if user_balance < price:
+        await update.message.reply_text(
+            f"❌ ***လက်ကျန်ငွေ မလုံလောက်ပါ!***\n\n"
+            f"💰 ***လိုအပ်တဲ့ငွေ***: {price:,} MMK\n"
+            f"💳 ***သင့်လက်ကျန်***: {user_balance:,} MMK\n\n"
+            "***ငွေဖြည့်ရန်*** `/topup amount` ***သုံးပါ။***",
+            parse_mode="Markdown"
+        )
+        return
+
+    order_id = f"PUBG{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    order = {
+        "order_id": order_id,
+        "game": "PUBG",
+        "player_id": player_id,
+        "amount": amount,
+        "price": price,
+        "status": "pending",
+        "timestamp": datetime.now().isoformat(),
+        "user_id": user_id,
+        "chat_id": update.effective_chat.id
+    }
+
+    db.update_balance(user_id, -price)
+    db.add_order(user_id, order) # Order မှတ်တမ်းထဲ ထည့်
+    new_balance = user_balance - price
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Confirm (PUBG)", callback_data=f"pubg_confirm_{order_id}"),
+            InlineKeyboardButton("❌ Cancel", callback_data=f"order_cancel_{order_id}") # Cancel က MLBB နဲ့ အတူတူ သုံးလို့ရ
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    user_name = f"{update.effective_user.first_name} {update.effective_user.last_name or ''}".strip()
+    admin_msg = (
+        f"🔔 ***PUBG UC Order အသစ်!***\n\n"
+        f"📝 ***Order ID:*** `{order_id}`\n"
+        f"👤 ***User Name:*** [{user_name}](tg://user?id={user_id})\n\n"
+        f"🆔 ***User ID:*** `{user_id}`\n"
+        f"🎮 ***Player ID:*** `{player_id}`\n"
+        f"💎 ***Amount:*** {amount}\n"
+        f"💰 ***Price:*** {price:,} MMK\n"
+        f"📊 Status: ⏳ ***စောင့်ဆိုင်းနေသည်***"
+    )
+
+    load_admin_ids_global()
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id, text=admin_msg,
+                parse_mode="Markdown", reply_markup=reply_markup
+            )
+        except: pass
+
+    try:
+        if await is_bot_admin_in_group(context.bot, ADMIN_GROUP_ID):
+            group_msg = admin_msg + "\n#NewOrder #PUBG"
+            msg_obj = await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+            
+            db.add_message_to_delete_queue(msg_obj.message_id, msg_obj.chat_id, datetime.now().isoformat())
+    except Exception as e:
+        print(f"Error sending to admin group in pubg_command: {e}")
+        pass
+
+    await update.message.reply_text(
+        f"✅ ***PUBG UC အော်ဒါ အောင်မြင်ပါပြီ!***\n\n"
+        f"📝 ***Order ID:*** `{order_id}`\n"
+        f"🎮 ***Player ID:*** `{player_id}`\n"
+        f"💎 ***UC:*** {amount}\n"
+        f"💰 ***ကုန်ကျစရိတ်:*** {price:,} MMK\n"
+        f"💳 ***လက်ကျန်ငွေ:*** {new_balance:,} MMK\n"
+        f"📊 Status: ⏳ ***စောင့်ဆိုင်းနေသည်***\n\n"
+        "⚠️ ***Admin က confirm လုပ်ပြီးမှ UC များ ရရှိပါမယ်။***",
+        parse_mode="Markdown"
+    )
+
+#__________________PUBG price FUNCTION__________________________________#
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -896,6 +1073,57 @@ async def price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "***ဥပမာ***:\n"
         "`/mmb 123456789 12345 wp1`\n"
         "`/mmb 123456789 12345 86`"
+    )
+
+    await update.message.reply_text(price_msg, parse_mode="Markdown")
+
+async def pubg_price_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(User) PUBG UC ဈေးနှုန်းများကို ကြည့်ပါ။"""
+    user_id = str(update.effective_user.id)
+
+    load_authorized_users()
+    if not is_user_authorized(user_id):
+        await update.message.reply_text("🚫 အသုံးပြုခွင့် မရှိပါ!\n\n/start နှိပ်ပြီး Register လုပ်ပါ။")
+        return
+
+    if user_id in user_states and user_states[user_id] == "waiting_approval":
+        await update.message.reply_text(
+            "⏳ ***Screenshot ပို့ပြီးပါပြီ!***\n\n"
+            "❌ ***Admin approve မလုပ်မချင်း commands တွေ သုံးလို့မရပါ။***",
+            parse_mode="Markdown"
+        )
+        return
+
+    if user_id in pending_topups:
+        await update.message.reply_text(
+            "⏳ ***Topup လုပ်ငန်းစဉ် ဆက်လက်လုပ်ဆောင်ပါ!***\n\n"
+            "❌ ***လက်ရှိ topup လုပ်ငန်းစဉ်ကို မပြီးသေးပါ။***",
+            parse_mode="Markdown"
+        )
+        return
+
+    custom_prices = db.load_pubg_prices() # From DB
+
+    default_prices = {
+        "60uc": 1500, "325uc": 7500, "660uc": 15000,
+        "1800uc": 37500, "3850uc": 75000, "8100uc": 150000
+    }
+
+    current_prices = {**default_prices, **custom_prices}
+    price_msg = "💎 ***PUBG UC ဈေးနှုန်းများ***\n\n"
+
+    # Sort keys (60, 325, 660, ...)
+    sorted_keys = sorted(current_prices.keys(), key=lambda x: int(re.sub(r'\D', '', x)))
+
+    for uc in sorted_keys:
+        price_msg += f"• {uc} = {current_prices[uc]:,} MMK\n"
+    
+    price_msg += "\n"
+    price_msg += (
+        "***📝 အသုံးပြုနည်း***:\n"
+        "`/pubg <player_id> <amount>`\n\n"
+        "***ဥပမာ***:\n"
+        "`/pubg 12345678 60uc`"
     )
 
     await update.message.reply_text(price_msg, parse_mode="Markdown")
@@ -1208,6 +1436,186 @@ async def reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("❌ Message မပို့နိုင်ပါ။")
 
+async def check_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin Only) User ID ဖြင့် User ၏ Data များကို စစ်ဆေးပါ။"""
+    user_id = str(update.effective_user.id)
+    
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ သင်သည် admin မဟုတ်ပါ!")
+        return
+
+    args = context.args
+    if len(args) != 1:
+        await update.message.reply_text("❌ Format မှားနေပါပြီ!\n`/checkuser <user_id>`")
+        return
+        
+    target_user_id = args[0]
+    user_data = db.get_user(target_user_id) # DB ထဲက user ကို ရှာပါ
+
+    if not user_data:
+        await update.message.reply_text(f"❌ User ID `{target_user_id}` ကို မတွေ့ရှိပါ။")
+        return
+
+    # User Data တွေ ထုတ်ပါ
+    balance = user_data.get("balance", 0)
+    total_orders = len(user_data.get("orders", []))
+    total_topups = len(user_data.get("topups", []))
+    name = user_data.get('name', 'Unknown').replace('*', '').replace('_', '').replace('`', '')
+    username = user_data.get('username', 'None').replace('*', '').replace('_', '').replace('`', '')
+    joined_at = user_data.get('joined_at', 'Unknown')[:10]
+    
+    # (Affiliate Data)
+    referred_by = user_data.get('referred_by', 'None')
+    referral_earnings = user_data.get('referral_earnings', 0)
+
+    # Pending topup တွေကို စစ်ဆေးပါ
+    pending_topups_count = 0
+    pending_amount = 0
+    for topup in user_data.get("topups", []):
+        if topup.get("status") == "pending":
+            pending_topups_count += 1
+            pending_amount += topup.get("amount", 0)
+
+    status_msg = ""
+    if pending_topups_count > 0:
+        status_msg = f"\n⏳ ***Pending Topups***: {pending_topups_count} ခု ({pending_amount:,} MMK)"
+
+    # Admin ကို ပြန်ပို့မယ့် Message
+    report_msg = (
+        f"📊 ***User Data Report***\n"
+        f"*(ID: `{target_user_id}`)*\n\n"
+        f"👤 ***Name***: {name}\n"
+        f"🆔 ***Username***: @{username}\n"
+        f"📅 ***Joined***: {joined_at}\n"
+        f"--- (Balance) ---\n"
+        f"💰 ***လက်ကျန်ငွေ***: `{balance:,} MMK`\n"
+        f"📦 ***စုစုပေါင်း အော်ဒါများ***: {total_orders}\n"
+        f"💳 ***စုစုပေါင်း ငွေဖြည့်မှုများ***: {total_topups}{status_msg}\n"
+        f"--- (Affiliate) ---\n"
+        f"💸 ***Commission ရငွေ***: `{referral_earnings:,} MMK`\n"
+        f"🔗 ***ခေါ်လာသူ ID***: `{referred_by}`\n"
+    )
+    
+    await update.message.reply_text(report_msg, parse_mode="Markdown")
+
+async def check_all_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Owner Only) User အားလုံး၏ data များကို list ဖြင့် စစ်ဆေးပါ။"""
+    user_id = str(update.effective_user.id)
+    
+    # Owner (ADMIN_ID) သာ သုံးခွင့်ပြုပါ
+    if not is_owner(user_id):
+        await update.message.reply_text("❌ ဤ command ကို Bot Owner (ADMIN_ID) တစ်ဦးတည်းသာ အသုံးပြုနိုင်ပါသည်။")
+        return
+
+    try:
+        all_users = db.get_all_users()
+    except Exception as e:
+        await update.message.reply_text(f"❌ User data များကို DB မှ ဆွဲထုတ်ရာတွင် Error ဖြစ်နေပါသည်: {e}")
+        return
+
+    if not all_users:
+        await update.message.reply_text("ℹ️ Bot မှာ User တစ်ယောက်မှ မရှိသေးပါဘူး။")
+        return
+
+    await update.message.reply_text(
+        f"📊 **All User Report**\n\n"
+        f"User စုစုပေါင်း `{len(all_users)}` ယောက်၏ data ကို စတင် စစ်ဆေးပါပြီ။\n"
+        f"User အရေအတွက် များပါက message များ ခွဲပို့ပါမည်။ ခဏစောင့်ပါ...",
+        parse_mode="Markdown"
+    )
+
+    message_chunk = "--- 📊 **All User Data Report** ---\n\n"
+    users_count = 0
+    
+    for user_data in all_users:
+        users_count += 1
+        
+        # DB မှ data များကို ဆွဲထုတ်ပါ
+        uid = user_data.get("user_id", "N/A")
+        name = user_data.get("name", "Unknown").replace('`', '').replace('*', '') # Markdown error မတက်အောင် clean လုပ်
+        balance = user_data.get("balance", 0)
+        orders_count = len(user_data.get("orders", []))
+        topups_count = len(user_data.get("topups", []))
+        commission = user_data.get("referral_earnings", 0) # Affiliate commission
+        
+        # User တစ်ယောက်ချင်းစီအတွက် စာကြောင်း
+        line = (
+            f"❖ **{name}** ● `{uid}` ●\n"
+            f"  ◈Bᴀʟᴀɴᴄᴇ↝ {balance:,} | ◈Oʀᴅᴇʀ↝ {orders_count} | ◈Tᴏᴘᴜᴘ↝ {topups_count} | ◈Cᴏᴍᴍɪssɪᴏɴ↝ {commission:,}\n"
+            f"----------------------------\n"
+        )
+        
+        # Telegram Message Limit (4096) မကျော်အောင် စစ်ဆေးပါ
+        if len(message_chunk) + len(line) > 4000:
+            # Message အရမ်းရှည်လာရင် အပိုင်းဖြတ်ပြီး ပို့ပါ
+            await update.message.reply_text(message_chunk, parse_mode="Markdown")
+            # Message အသစ် ပြန်စပါ
+            message_chunk = ""
+        
+        message_chunk += line
+
+    # နောက်ဆုံး ကျန်နေတဲ့ message chunk ကို ပို့ပါ
+    if message_chunk:
+        await update.message.reply_text(message_chunk, parse_mode="Markdown")
+        
+    await update.message.reply_text(f"✅ Report ပြီးပါပြီ။ User `{users_count}` ယောက်လုံးကို စစ်ဆေးပြီးပါပြီ။")
+
+
+async def clean_python_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Owner Only) .py file များထဲမှ comment များကို ရှင်းလင်းပါ။"""
+    user_id = str(update.effective_user.id)
+    
+    if not is_owner(user_id):
+        await update.message.reply_text("❌ ဤ command ကို Bot Owner (ADMIN_ID) တစ်ဦးတည်းသာ အသုံးပြုနိုင်ပါသည်။")
+        return
+
+    args = context.args
+    if len(args) != 1:
+        await update.message.reply_text("❌ Format မှားနေပါပြီ!\n`/cleanpython <file_name.py>`\n\nဥပမာ: `/cleanpython main.py`")
+        return
+        
+    file_name = args[0]
+    
+    # Security Check (Directory Traversal မဖြစ်အောင် + .py file ဟုတ်မှ)
+    if ".." in file_name or not file_name.endswith(".py"):
+        await update.message.reply_text("❌ `.py` file များကိုသာ ရှင်းလင်းခွင့်ပြုပါသည်။")
+        return
+        
+    if not os.path.exists(file_name):
+        await update.message.reply_text(f"❌ File `{file_name}` ကို မတွေ့ရှိပါ။")
+        return
+
+    try:
+        cleaned_lines = []
+        with open(file_name, 'r', encoding='utf-8') as f:
+            for line in f:
+                # '#' နဲ့ စတဲ့ comment line တွေကို ဖြုတ်
+                if not line.strip().startswith('#'):
+                    # Empty line တွေ အရမ်းများမသွားအောင် စာလုံးပါမှ ထည့်
+                    if line.strip(): 
+                        cleaned_lines.append(line)
+        
+        cleaned_content = "".join(cleaned_lines)
+        
+        # ရှင်းလင်းပြီးသား content ကို clean.txt file အဖြစ် ဖန်တီး
+        output_filename = "clean.txt"
+        with open(output_filename, "w", encoding="utf-8") as out_f:
+            out_f.write(f"# --- Cleaned version of {file_name} ---\n\n")
+            out_f.write(cleaned_content)
+            
+        # User ဆီကို file ပြန်ပို့
+        await context.bot.send_document(
+            chat_id=update.effective_chat.id,
+            document=open(output_filename, "rb"),
+            caption=f"✅ `{file_name}` ထဲမှ Comment များ ရှင်းလင်းပြီးပါပြီ။",
+            filename=f"clean_{file_name}.txt"
+        )
+        
+        # Server ပေါ်က file အဟောင်းကို ပြန်ဖျက်
+        os.remove(output_filename)
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error ဖြစ်သွားပါသည်: {e}")
 
 async def _send_registration_to_admins(user: User, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1354,7 +1762,9 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"#UserBanned"
         )
         if await is_bot_admin_in_group(context.bot, ADMIN_GROUP_ID):
-            await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+            msg_obj = await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+            
+            db.add_message_to_delete_queue(msg_obj.message_id, msg_obj.chat_id, datetime.now().isoformat())
     except Exception as e:
         print(f"Error sending to admin group in ban_command: {e}")
         pass
@@ -1429,7 +1839,9 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"#UserUnbanned"
         )
         if await is_bot_admin_in_group(context.bot, ADMIN_GROUP_ID):
-            await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+            msg_obj = await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+            
+            db.add_message_to_delete_queue(msg_obj.message_id, msg_obj.chat_id, datetime.now().isoformat())
             
     except Exception as e:
         print(f"Error sending to admin group in unban_command: {e}")
@@ -1716,6 +2128,95 @@ async def removeprice_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         parse_mode="Markdown"
     )
 
+#__________________PUBG remove price FUNCTION__________________________________#
+
+async def setpubgprice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin Only) PUBG UC ဈေးနှုန်း သတ်မှတ်ပါ။ (Batch update နိုင်သည်)"""
+    user_id = str(update.effective_user.id)
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ သင်သည် admin မဟုတ်ပါ!")
+        return
+
+    args = context.args
+    
+    # --- (ပြင်ဆင်ပြီး) Batch Update Logic ---
+    if len(args) < 2 or len(args) % 2 != 0:
+        await update.message.reply_text(
+            "❌ ***Format မှားနေပါသည်!***\n\n"
+            "***တစ်ခုချင်း:***\n"
+            "`/setpubgprice 60uc 1500`\n\n"
+            "***အများကြီး:***\n"
+            "`/setpubgprice 60uc 1500 325uc 7500`",
+            parse_mode="Markdown"
+        )
+        return
+
+    custom_prices = db.load_pubg_prices()
+    updated_items = []
+    
+    try:
+        # Argument တွေကို (၂) ခု တစ်တွဲ ယူပါ (item, price)
+        for i in range(0, len(args), 2):
+            item = args[i].lower()
+            price = int(args[i+1])
+            
+            if price < 0:
+                await update.message.reply_text(f"❌ ဈေးနှုန်း ({item}) သုညထက် ကြီးရမည်!")
+                return
+                
+            custom_prices[item] = price
+            updated_items.append(f"• {item} = {price:,} MMK")
+            
+    except ValueError:
+        await update.message.reply_text("❌ ဈေးနှုန်းများ ကိန်းဂဏန်းဖြင့် ထည့်ပါ!")
+        return
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+        return
+
+    db.save_pubg_prices(custom_prices) # DB function အသစ်ကို ခေါ်ပါ
+
+    await update.message.reply_text(
+        f"✅ ***PUBG ဈေးနှုန်း ပြောင်းလဲပါပြီ!***\n\n"
+        + "\n".join(updated_items),
+        parse_mode="Markdown"
+    )
+    # --- (ပြီး) ---
+
+async def removepubgprice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin Only) PUBG UC ဈေးနှုန်း ဖျက်ပါ။"""
+    user_id = str(update.effective_user.id)
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ သင်သည် admin မဟုတ်ပါ!")
+        return
+
+    args = context.args
+    if len(args) != 1:
+        await update.message.reply_text(
+            "❌ ***မှန်ကန်တဲ့အတိုင်း***: `/removepubgprice <amount>`\n"
+            "***ဥပမာ***: `/removepubgprice 60uc`",
+            parse_mode="Markdown"
+        )
+        return
+
+    item = args[0].lower()
+    custom_prices = db.load_pubg_prices()
+    if item not in custom_prices:
+        await update.message.reply_text(f"❌ `{item}` မှာ custom price မရှိပါ!")
+        return
+
+    del custom_prices[item]
+    db.save_pubg_prices(custom_prices) # DB function အသစ်ကို ခေါ်ပါ
+
+    await update.message.reply_text(
+        f"✅ ***PUBG Custom Price ဖျက်ပါပြီ!***\n\n"
+        f"💎 Item: `{item}`\n"
+        f"🔄 ***Default price ကို ပြန်သုံးပါမယ်။***",
+        parse_mode="Markdown"
+    )
+
+#__________________PUBG remove price FUNCTION__________________________________#
+
 async def setwavenum_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if not is_admin(user_id):
@@ -1931,27 +2432,25 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not update.message.reply_to_message:
         await update.message.reply_text(
-            "❌ ***စာ သို့မဟုတ် ပုံကို reply လုပ်ပြီး:***\n"
-            "• `/broadcast user` - Users သာ\n"
-            "• `/broadcast gp` - Groups သာ\n"
-            "• `/broadcast user gp` - နှစ်ခုလုံး",
+            "❌ ***စာ သို့မဟုတ် ပုံကို reply လုပ်ပြီး:***\n\n"
+            "• `/broadcast` - (User တွေရော Group တွေရော အကုန်ပို့)\n"
+            "• `/broadcast -pin` - (အကုန်ပို့ပြီး Group တွေမှာ Pin ထောက်)\n"
+            "• `/broadcast -user` - (User တွေဆီကိုပဲ ပို့)\n"
+            "• `/broadcast -gp` - (Group တွေဆီကိုပဲ ပို့)\n"
+            "• `/broadcast -gp -pin` - (Group တွေဆီပို့ပြီး Pin ထောက်)",
             parse_mode="Markdown"
         )
         return
 
     args = context.args
-    if len(args) == 0:
-        await update.message.reply_text(
-            "❌ Target မရှိပါ! (user, gp, or user gp)", parse_mode="Markdown"
-        )
-        return
-
-    send_to_users = "user" in args
-    send_to_groups = "gp" in args
+    
+    should_pin = "-pin" in args
+    send_to_users = "-user" in args
+    send_to_groups = "-gp" in args
 
     if not send_to_users and not send_to_groups:
-        await update.message.reply_text("❌ Target မှားနေပါတယ်! (user, gp, or user gp)")
-        return
+        send_to_users = True
+        send_to_groups = True
 
     replied_msg = update.message.reply_to_message
     user_success = 0
@@ -1980,18 +2479,26 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_fail += 1
         
         if send_to_groups:
-            group_chats = set()
-            for user_doc in all_users:
-                for order in user_doc.get("orders", []):
-                    if order.get("chat_id") and order.get("chat_id") < 0: group_chats.add(order.get("chat_id"))
-                for topup in user_doc.get("topups", []):
-                    if topup.get("chat_id") and topup.get("chat_id") < 0: group_chats.add(topup.get("chat_id"))
+            # --- (ပြင်ဆင်ပြီး) DB ထဲက Group အားလုံးကို ယူပါ ---
+            group_chats = db.get_all_groups() 
             
             for chat_id in group_chats:
                 try:
-                    await context.bot.send_photo(
+                    # --- (Pin Logic) ---
+                    msg_obj = await context.bot.send_photo(
                         chat_id=chat_id, photo=photo_file_id, caption=caption, caption_entities=caption_entities
                     )
+                    
+                    if should_pin:
+                        if await is_bot_admin_in_group(context.bot, chat_id):
+                            try:
+                                await msg_obj.pin(disable_notification=False)
+                            except Exception as pin_e:
+                                print(f"Failed to pin message in group {chat_id}: {pin_e}")
+                        else:
+                            print(f"Cannot pin in group {chat_id}: Bot is not admin.")
+                    # --- (ပြီး) ---
+                            
                     group_success += 1
                     await asyncio.sleep(0.05)
                 except Exception as e:
@@ -2016,18 +2523,26 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_fail += 1
 
         if send_to_groups:
-            group_chats = set()
-            for user_doc in all_users:
-                for order in user_doc.get("orders", []):
-                    if order.get("chat_id") and order.get("chat_id") < 0: group_chats.add(order.get("chat_id"))
-                for topup in user_doc.get("topups", []):
-                    if topup.get("chat_id") and topup.get("chat_id") < 0: group_chats.add(topup.get("chat_id"))
+            # --- (ပြင်ဆင်ပြီး) DB ထဲက Group အားလုံးကို ယူပါ ---
+            group_chats = db.get_all_groups()
 
             for chat_id in group_chats:
                 try:
-                    await context.bot.send_message(
+                    # --- (Pin Logic) ---
+                    msg_obj = await context.bot.send_message(
                         chat_id=chat_id, text=message, entities=entities
                     )
+                    
+                    if should_pin:
+                        if await is_bot_admin_in_group(context.bot, chat_id):
+                            try:
+                                await msg_obj.pin(disable_notification=False)
+                            except Exception as pin_e:
+                                print(f"Failed to pin message in group {chat_id}: {pin_e}")
+                        else:
+                            print(f"Cannot pin in group {chat_id}: Bot is not admin.")
+                    # --- (ပြီး) ---
+                            
                     group_success += 1
                     await asyncio.sleep(0.05)
                 except Exception as e:
@@ -2109,6 +2624,72 @@ async def clean_mongodb_command(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         await update.message.reply_text(f"❌ ***CRITICAL ERROR***\n\nAn error occurred: {str(e)}")
 
+async def auto_delete_job(context: ContextTypes.DEFAULT_TYPE):
+    """(Timer Job) DB ထဲက message အဟောင်းတွေကို လိုက်ဖျက်မယ့် function"""
+    
+    # (၁) Setting ကို အရင်စစ်
+    if not g_settings.get("auto_delete", {}).get("enabled", False):
+        # print("Auto-delete is disabled.")
+        return
+        
+    print(f"Running auto-delete job... (Time: {datetime.now()})")
+    
+    hours_to_keep = g_settings.get("auto_delete", {}).get("hours", 24)
+    delete_before_time = datetime.now() - timedelta(hours=hours_to_keep)
+    
+    messages_to_delete = db.get_all_messages_to_delete()
+    
+    deleted_count = 0
+    failed_count = 0
+    
+    for msg in messages_to_delete:
+        try:
+            msg_timestamp = datetime.fromisoformat(msg["timestamp"])
+            
+            # (၂) အချိန်စစ်
+            if msg_timestamp < delete_before_time:
+                await context.bot.delete_message(chat_id=msg["chat_id"], message_id=msg["message_id"])
+                db.remove_message_from_delete_queue(msg["message_id"])
+                deleted_count += 1
+                await asyncio.sleep(0.5) # API limit မမိအောင် ခဏနား
+                
+        except Exception as e:
+            # Message က 48 နာရီ ကျော်သွားလို့ ဖျက်မရတော့ရင် (ဒါမှမဟုတ်) Bot က Admin မဟုတ်တော့ရင်
+            print(f"Failed to delete message {msg['message_id']}: {e}")
+            db.remove_message_from_delete_queue(msg["message_id"]) # DB ထဲကနေ ဖယ်ထုတ်
+            failed_count += 1
+
+    print(f"Auto-delete job finished. Deleted: {deleted_count}, Failed/Removed: {failed_count}")
+
+async def set_auto_delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Owner Only) Admin Group message များကို auto ဖျက်မလား ဖွင့်/ပိတ်။"""
+    user_id = str(update.effective_user.id)
+    if not is_owner(user_id):
+        await update.message.reply_text("❌ Owner (ADMIN_ID) သာ အသုံးပြုနိုင်ပါသည်။")
+        return
+        
+    args = context.args
+    if len(args) != 1 or args[0].lower() not in ["on", "off"]:
+        await update.message.reply_text("❌ Format မှားနေပါပြီ!\n`/autodelete on` သို့မဟုတ် `/autodelete off`")
+        return
+        
+    new_status = (args[0].lower() == "on") # True or False
+    
+    # DB ကို update လုပ်ပါ
+    db.update_setting("auto_delete.enabled", new_status)
+    # Local settings ကို reload လုပ်ပါ
+    load_global_settings()
+    
+    if new_status:
+        hours = g_settings.get("auto_delete", {}).get("hours", 24)
+        await update.message.reply_text(
+            f"✅ **Auto-Delete ဖွင့်လိုက်ပါပြီ။**\n\n"
+            f"Admin Group ထဲက Bot ပို့ထားတဲ့ message တွေ (၂၄) နာရီ ပြည့်ရင် auto ပျက်သွားပါမည်။"
+        )
+    else:
+        await update.message.reply_text("🔴 **Auto-Delete ပိတ်လိုက်ပါပြီ။**")
+
+
 # --- (အသစ်) /setpercentage Command ---
 async def setpercentage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """(Owner Only) Affiliate commission percentage ကို သတ်မှတ်ပါ။"""
@@ -2178,7 +2759,7 @@ async def sasukemlbbtopup_command(update: Update, context: ContextTypes.DEFAULT_
 `/history` - မှတ်တမ်း ကြည့်ရန်
 `/cancel` - ငွေဖြည့်ခြင်း ပယ်ဖျက်ရန်
 `/register` - Bot သုံးခွင့် တောင်းဆိုရန်
-`/affiliate` - Commission link ရယူရန်
+`/affiliate` - ကော်မရှင်လင့်ရယူရန်
 
 ---
 🔧 **Admin Commands** (Admin များ)
@@ -2302,7 +2883,7 @@ async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_msg, parse_mode="Markdown")
 
 
-# --- Message Handlers ---
+# --- Message Handlers --
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- (ပြင်ဆင်ပြီး) Group Chat တွေမှာ လုံးဝ မအလုပ်လုပ်အောင် ထည့်ပါ ---
@@ -2525,6 +3106,39 @@ async def handle_restricted_content(update: Update, context: ContextTypes.DEFAUL
                 "🆘 /start - အကူအညီ",
                 parse_mode="Markdown"
             )
+
+
+async def on_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bot က Group အသစ်ထဲ ဝင်လာရင် (ဒါမှမဟုတ် member သစ် ဝင်လာရင်) အလုပ်လုပ်မည်။"""
+    me = await context.bot.get_me()
+    chat = update.effective_chat
+    
+    if chat.type in ["group", "supergroup"]:
+        for new_member in update.message.new_chat_members:
+            if new_member.id == me.id:
+                # Bot ကိုယ်တိုင် အသစ်ဝင်လာတာ
+                print(f"Bot joined a new group: {chat.title} (ID: {chat.id})")
+                db.add_group(chat.id, chat.title)
+                # (Optional) Group ထဲကို ကြိုဆို message ပို့
+                try:
+                    await context.bot.send_message(
+                        chat_id=chat.id,
+                        text="👋 မင်္ဂလာပါ! Sᴀsᴜᴋᴇ Mʟʙʙ Tᴏᴘ Uᴘ Bᴏᴛ ပါရှင့်။\n"
+                             "Admin မှ /unban <user_id> လုပ်ပေးပြီးမှ User များ သုံးနိုင်ပါမည်။"
+                    )
+                except Exception as e:
+                    print(f"Error sending welcome message to group: {e}")
+
+async def on_left_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bot က Group ကနေ ထွက်သွားရင် (ဒါမှမဟုတ် အထုတ်ခံရရင်) အလုပ်လုပ်မည်။"""
+    me = await context.bot.get_me()
+    chat = update.effective_chat
+    
+    if chat.type in ["group", "supergroup"]:
+        if update.message.left_chat_member.id == me.id:
+            # Bot ကိုယ်တိုင် ထွက်သွား/အထုတ်ခံရတာ
+            print(f"Bot left/was kicked from group: (ID: {chat.id})")
+            db.remove_group(chat.id)
 
 # --- Report Commands (Using DB iteration) ---
 
@@ -2870,7 +3484,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"👤 ***လက်ခံသူ:*** {admin_name}\n"
                     f"#RegistrationApproved"
                 )
-                await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+                msg_obj = await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+                
+                db.add_message_to_delete_queue(msg_obj.message_id, msg_obj.chat_id, datetime.now().isoformat())
         except:
             pass
 
@@ -3004,7 +3620,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"👤 ***လက်ခံသူ:*** {admin_name}\n"
                         f"#TopupApproved"
                     )
-                    await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+                    msg_obj = await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+                    
+                    db.add_message_to_delete_queue(msg_obj.message_id, msg_obj.chat_id, datetime.now().isoformat())
             except:
                 pass
 
@@ -3130,7 +3748,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"👤 ***ငြင်းပယ်သူ:*** {admin_name}\n"
                         f"#TopupRejected"
                     )
-                    await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+                    msg_obj = await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+                    
+                    db.add_message_to_delete_queue(msg_obj.message_id, msg_obj.chat_id, datetime.now().isoformat())
             except:
                 pass
 
@@ -3140,7 +3760,87 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         # ... ( topup_reject_ logic ဤနေရာတွင် ပြီးဆုံး ) ...
 
-    # --- (PUBG LOGIC ကို ဖြုတ်ထားပါသည်) ---
+    # --- (PUBG CONFIRM LOGIC - Commission ဖြုတ်ထားပါသည်) ---
+    elif query.data.startswith("pubg_confirm_"):
+        if not is_admin(user_id):
+            await query.answer("❌ ***သင်သည် admin မဟုတ်ပါ!***")
+            return
+        
+        order_id = query.data.replace("pubg_confirm_", "")
+        updates = {
+            "status": "confirmed",
+            "confirmed_by": admin_name,
+            "confirmed_at": datetime.now().isoformat()
+        }
+        
+        target_user_id = db.find_and_update_order(order_id, updates)
+        
+        if target_user_id:
+            # --- (မူလ Edit Logic) ---
+            try:
+                await query.edit_message_text(
+                    text=query.message.text.replace("⏳ စောင့်ဆိုင်းနေသည်", f"✅ လက်ခံပြီး (by {admin_name})"),
+                    parse_mode="Markdown",
+                    reply_markup=None
+                )
+            except: pass
+            # --- (ပြီး) ---
+            
+            order_details = db.get_order_by_id(order_id)
+            if not order_details: order_details = {} 
+
+            load_admin_ids_global()
+            for admin_id in ADMIN_IDS:
+                if admin_id != int(user_id):
+                    try:
+                        await context.bot.send_message(
+                            chat_id=admin_id,
+                            text=f"✅ ***PUBG Order Confirmed!***\n"
+                                 f"📝 ***Order ID:*** `{order_id}`\n"
+                                 f"👤 ***Confirmed by:*** {admin_name}",
+                            parse_mode="Markdown"
+                        )
+                    except: pass
+            
+            user_doc = db.get_user(target_user_id)
+            user_name = user_doc.get("name", "Unknown") if user_doc else "Unknown"
+            
+            try:
+                if await is_bot_admin_in_group(context.bot, ADMIN_GROUP_ID):
+                    group_msg = (
+                        f"✅ ***PUBG Order လက်ခံပြီး!***\n\n"
+                        f"📝 ***Order ID:*** `{order_id}`\n"
+                        f"👤 ***User:*** [{user_name}](tg://user?id={target_user_id})\n"
+                        f"👤 ***လက်ခံသူ:*** {admin_name}\n"
+                        f"#OrderConfirmed #PUBG"
+                    )
+                    msg_obj = await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+                    
+                    db.add_message_to_delete_queue(msg_obj.message_id, msg_obj.chat_id, datetime.now().isoformat())
+            except:
+                pass
+
+            try:
+                chat_id = order_details.get("chat_id", int(target_user_id))
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"✅ ***PUBG Order လက်ခံပြီးပါပြီ!***\n\n"
+                         f"📝 ***Order ID:*** `{order_id}`\n"
+                         f"👤 ***User:*** [{user_name}](tg://user?id={target_user_id})\n"
+                         f"📊 Status: ✅ ***လက်ခံပြီး***\n\n"
+                         "💎 ***UC များကို ထည့်သွင်းပေးလိုက်ပါပြီ။***",
+                    parse_mode="Markdown"
+                )
+            except:
+                pass
+
+            # === (Commission Logic နေရာ ၂ ကို ဒီကနေ ဖျက်လိုက်ပါပြီ) ===
+
+            await query.answer("✅ PUBG Order လက်ခံပါပြီ!", show_alert=True)
+        else:
+            await query.answer("❌ Order မတွေ့ရှိပါ သို့မဟုတ် လုပ်ဆောင်ပြီးပါပြီ!", show_alert=True)
+        return
+    # --- (PUBG LOGIC ပြီး) ---
 
     elif query.data.startswith("order_confirm_"):
         if not is_admin(user_id):
@@ -3195,7 +3895,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"👤 ***လက်ခံသူ:*** {admin_name}\n"
                         f"#OrderConfirmed"
                     )
-                    await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+                    msg_obj = await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+                    
+                    db.add_message_to_delete_queue(msg_obj.message_id, msg_obj.chat_id, datetime.now().isoformat())
             except:
                 pass
 
@@ -3286,11 +3988,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"❌ ***Order ငြင်းပယ်ပြီး!***\n\n"
                         f"📝 ***Order ID:*** `{order_id}`\n"
                         f"👤 ***User:*** [{user_name}](tg://user?id={target_user_id})\n"
-                        f"💰 ***Refunded:*** {refund_amount:,} MMK\n"
+                        f"💰 ***Refunded:*** {refund_amount:,} MMK`\n"
                         f"👤 ***ငြင်းပယ်သူ:*** {admin_name}\n"
                         f"#OrderCancelled"
                     )
-                    await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+                    msg_obj = await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
+                    
+                    db.add_message_to_delete_queue(msg_obj.message_id, msg_obj.chat_id, datetime.now().isoformat())
             except:
                 pass
 
@@ -3483,6 +4187,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=reply_markup
             )
 
+
 def main():
     if not BOT_TOKEN:
         print("❌ BOT_TOKEN environment variable မရှိပါ!")
@@ -3529,17 +4234,24 @@ def main():
         print(f"Error during special user init: {e}")
     # --- Auto Balance & Authorize အပိုင်း ပြီးပါပြီ ---
 
-
-    application = Application.builder().token(BOT_TOKEN).build() 
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # --- (အသစ်) Job Queue ကို ထည့်ပါ ---
+    job_queue = application.job_queue
+    # Bot စပြီး (၁၀) စက္ကန့်မှာ ပထမဆုံး (၁) ခါ run မယ်၊
+    # ပြီးရင် (၁) နာရီ (3600 seconds) တိုင်း (၁) ခါ run မယ်။
+    job_queue.run_repeating(auto_delete_job, interval=3600, first=10) 
 
     # User commands
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("mmb", mmb_command))
+    application.add_handler(CommandHandler("pubg", pubg_command)) # <-- PUBG command ထည့်ပြီး
     application.add_handler(CommandHandler("balance", balance_command))
     application.add_handler(CommandHandler("topup", topup_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
     # application.add_handler(CommandHandler("c", c_command)) # Auto-calc ကြောင့် ဖြုတ်ထား
     application.add_handler(CommandHandler("price", price_command))
+    application.add_handler(CommandHandler("pubgprice", pubg_price_command))
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("register", register_command))
     application.add_handler(CommandHandler("clearhistory", clear_history_command)) # history.py မှ
@@ -3550,6 +4262,7 @@ def main():
     application.add_handler(CommandHandler("deduct", deduct_command))
     application.add_handler(CommandHandler("done", done_command))
     application.add_handler(CommandHandler("reply", reply_command))
+    application.add_handler(CommandHandler("checkuser", check_user_command))
     application.add_handler(CommandHandler("ban", ban_command))
     application.add_handler(CommandHandler("unban", unban_command))
     application.add_handler(CommandHandler("addadm", addadm_command))
@@ -3560,11 +4273,16 @@ def main():
     application.add_handler(CommandHandler("adminhelp", adminhelp_command))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
     application.add_handler(CommandHandler("cleanmongodb", clean_mongodb_command))
-    application.add_handler(CommandHandler("setpercentage", setpercentage_command)) # <-- % command ထည့်ပြီး
+    application.add_handler(CommandHandler("setpercentage", setpercentage_command))
+    application.add_handler(CommandHandler("autodelete", set_auto_delete_command))
+    application.add_handler(CommandHandler("checkallusers", check_all_users_command))
+    application.add_handler(CommandHandler("cleanpython", clean_python_command))
 
     # Price & Payment Settings
     application.add_handler(CommandHandler("setprice", setprice_command))
     application.add_handler(CommandHandler("removeprice", removeprice_command))
+    application.add_handler(CommandHandler("setpubgprice", setpubgprice_command)) # <-- PUBG command ထည့်ပြီး
+    application.add_handler(CommandHandler("removepubgprice", removepubgprice_command)) # <-- PUBG command ထည့်ပြီး
     application.add_handler(CommandHandler("setwavenum", setwavenum_command))
     application.add_handler(CommandHandler("setkpaynum", setkpaynum_command))
     application.add_handler(CommandHandler("setwavename", setwavename_command))
@@ -3588,6 +4306,8 @@ def main():
 
     # Message handlers
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_chat_members))
+    application.add_handler(MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, on_left_chat_member))
     application.add_handler(MessageHandler(
         (filters.TEXT | filters.VOICE | filters.Sticker.ALL | filters.VIDEO |
          filters.ANIMATION | filters.AUDIO | filters.Document.ALL |
@@ -3604,3 +4324,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+    
