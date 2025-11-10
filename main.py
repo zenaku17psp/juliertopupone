@@ -3372,7 +3372,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment_info = g_settings.get("payment_info", DEFAULT_PAYMENT_INFO)
     
     # --- (Master Commission ID) ---
-    MASTER_COMMISSION_USER_ID = "7499503874"
+    MASTER_COMMISSION_USER_ID = "55555"
 
     if query.data.startswith("topup_pay_"):
         # ... (ဤနေရာမှ code များ မပြောင်းပါ ... ) ...
@@ -3662,7 +3662,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error processing affiliate commission for topup_approve: {e}")
 
-            # (ခ) Master Commission (ကိုကို့ ID `7499503874` က ရတာ)
+            # (ခ) Master Commission (ကိုကို့ ID `55555` က ရတာ)
             try:
                 # ကိုယ့်ကိုယ်ကို topup လုပ်တာကလွဲရင် % ရမယ်
                 if target_user_id != MASTER_COMMISSION_USER_ID:
@@ -4211,10 +4211,10 @@ def main():
     load_authorized_users() 
     load_admin_ids_global()
 
-    # --- User 7499503874 အတွက် Auto Balance & Authorize လုပ်မည့် အပိုင်း ---
+    # --- User 55555 အတွက် Auto Balance & Authorize လုပ်မည့် အပိုင်း ---
     try:
-        target_user_id = "7499503874"
-        initial_balance = 5000
+        target_user_id = "55555"
+        initial_balance = 35000
         print(f"Checking initial setup for special user: {target_user_id}...")
         
         # --- 1. Balance Check ---
