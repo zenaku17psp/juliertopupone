@@ -69,6 +69,14 @@ def create_user(user_id, name, username, referrer_id=None):
         upsert=True
     )
 
+def update_user_profile(user_id, name, username):
+    """User ၏ name နှင့် username ကို update လုပ်ပါ။"""
+    if not client: return None
+    users_collection.update_one(
+        {"user_id": str(user_id)},
+        {"$set": {"name": name, "username": username}}
+    )
+
 def get_balance(user_id):
     """User ၏ balance ကိုသာ ရယူပါ။"""
     user = get_user(user_id)
