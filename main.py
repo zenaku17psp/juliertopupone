@@ -345,7 +345,7 @@ async def send_maintenance_message(update: Update, command_type):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = str(user.id)
-    username = user.username or "-"
+    username = user.username or "None"
     name = f"{user.first_name} {user.last_name or ''}".strip()
 
     load_authorized_users() # 1. Auth list ကို အရင် load လုပ်ပါ
@@ -396,6 +396,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 5. User ကို DB ထဲမှာ ဖန်တီးပါ
     user_doc = db.get_user(user_id)
+    user_doc = db.get_user(user_id)
+    # 5. User ကို DB ထဲမှာ ဖန်တီးပါ
+    user_doc = db.get_user(user_id)
     if not user_doc:
         # User အသစ်ဖြစ်မှသာ referrer_id ကို DB ထဲ ထည့်သိမ်းပါ
         db.create_user(user_id, name, username, referrer_id)
@@ -411,12 +414,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(
                         chat_id=referrer_id,
                         text=f"🎉 **Referral အသစ်!**\n\n"
-                             f"👤 [{name}](tg://user?id={user_id}) က သင့် link မှတဆင့် bot ကို join လိုက်ပါပြီ။\n"
+                             f"👤 [{name}](tg://user?id={user_id}) က သင့် link မှတဆင့် bot ကို join လိုက်ပါပြီ။\n"
                              f"သူ order တင်တိုင်း {current_percentage:.0f}% commission ရရှိပါမယ်!",
                         parse_mode="Markdown"
                     )
             except Exception as e:
                 print(f"Error notifying referrer: {e}")
+    else:
+        # --- (!!! ဒီ 'ELSE' BLOCK အသစ်ကို ထပ်ထည့်ပါ !!!) ---
+        # User အဟောင်းဖြစ်ပါက Name နှင့် Username ကို DB တွင် Update လုပ်ပါ
+        db.update_user_profile(user_id, name, username)
+        # --- (ပြီး) ---
 
     if user_id in user_states:
         del user_states[user_id]
@@ -814,6 +822,11 @@ async def pubg_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
+    user = update.effective_user
+    name = f"{user.first_name} {user.last_name or ''}".strip()
+    username = user.username or "-"
+    db.update_user_profile(user_id, name, username)
+    # --- (ပြီး) ---
 
     load_authorized_users()
     if not is_user_authorized(user_id):
@@ -3359,7 +3372,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment_info = g_settings.get("payment_info", DEFAULT_PAYMENT_INFO)
     
     # --- (Master Commission ID) ---
-    MASTER_COMMISSION_USER_ID = "000000"
+    MASTER_COMMISSION_USER_ID = "7499503874"
 
     if query.data.startswith("topup_pay_"):
         # ... (ဤနေရာမှ code များ မပြောင်းပါ ... ) ...
@@ -3649,7 +3662,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error processing affiliate commission for topup_approve: {e}")
 
-            # (ခ) Master Commission (ကိုကို့ ID `000000` က ရတာ)
+            # (ခ) Master Commission (ကိုကို့ ID `7499503874` က ရတာ)
             try:
                 # ကိုယ့်ကိုယ်ကို topup လုပ်တာကလွဲရင် % ရမယ်
                 if target_user_id != MASTER_COMMISSION_USER_ID:
@@ -4198,9 +4211,9 @@ def main():
     load_authorized_users() 
     load_admin_ids_global()
 
-    # --- User 000000 အတွက် Auto Balance & Authorize လုပ်မည့် အပိုင်း ---
+    # --- User 7499503874 အတွက် Auto Balance & Authorize လုပ်မည့် အပိုင်း ---
     try:
-        target_user_id = "000000"
+        target_user_id = "7499503874"
         initial_balance = 5000
         print(f"Checking initial setup for special user: {target_user_id}...")
         
@@ -4209,7 +4222,7 @@ def main():
         
         if not user_doc:
             print(f"User not found. Creating user {target_user_id}...")
-            db.create_user(target_user_id, "", "") # Placeholder name
+            db.create_user(target_user_id, "Special User", "N/A", None)
             
             db.update_balance(target_user_id, initial_balance)
             print(f"Balance {initial_balance:,} MMK set for new user {target_user_id}.")
@@ -4325,4 +4338,4 @@ def main():
 if __name__ == "__main__":
     main()
     
-    
+ 
