@@ -2899,12 +2899,29 @@ async def adminhelp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Message Handlers --
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # --- (ပြင်ဆင်ပြီး) Group Chat တွေမှာ လုံးဝ မအလုပ်လုပ်အောင် ထည့်ပါ ---
-    if not update.message or update.effective_chat.type != "private":
+    # --- (ပြင်ဆင်ပြီး) Chat Type နှင့် Pending Status ကို အရင်စစ်ပါ ---
+    if not update.message or not update.effective_user:
+        return # Message or user missing
+        
+    user_id = str(update.effective_user.id)
+    chat_type = update.effective_chat.type
+
+    if user_id not in pending_topups:
+        if chat_type == "private":
+            # Private chat မှာ Topup မရှိဘဲ ပုံပို့ရင် စာပြန်
+            await update.message.reply_text(
+                "❌ ***Topup process မရှိပါ!***\n\n"
+                "🔄 ***အရင်ဆုံး `/topup amount` command ကို သုံးပါ။***\n"
+                "💡 ***ဥပမာ:*** `/topup 50000`",
+                parse_mode="Markdown"
+            )
+        else:
+            # Group ထဲမှာ Topup မရှိဘဲ ပုံပို့ရင် ဘာမှမလုပ် (Silent)
+            return
         return
     # --- (ပြီး) ---
-
-    user_id = str(update.effective_user.id)
+    
+    # (ဒီနေရာကို ရောက်လာရင် user က topup လုပ်နေတာ သေချာပြီ)
     load_authorized_users()
     if not is_user_authorized(user_id):
         return
@@ -2913,15 +2930,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ ***Payment screenshot သာ လက်ခံပါတယ်။***\n"
             "💳 ***KPay, Wave လွှဲမှု screenshot များသာ တင်ပေးပါ။***",
-            parse_mode="Markdown"
-        )
-        return
-
-    if user_id not in pending_topups:
-        await update.message.reply_text(
-            "❌ ***Topup process မရှိပါ!***\n\n"
-            "🔄 ***အရင်ဆုံး `/topup amount` command ကို သုံးပါ။***\n"
-            "💡 ***ဥပမာ:*** `/topup 50000`",
             parse_mode="Markdown"
         )
         return
@@ -2972,13 +2980,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         for admin_id in ADMIN_IDS:
             try:
-                await context.bot.send_photo(
+                # (Auto-Delete Logic)
+                msg_obj = await context.bot.send_photo(
                     chat_id=admin_id,
                     photo=update.message.photo[-1].file_id,
                     caption=admin_msg,
                     parse_mode="Markdown",
                     reply_markup=reply_markup
                 )
+                db.add_message_to_delete_queue(msg_obj.message_id, msg_obj.chat_id, datetime.now().isoformat())
             except:
                 pass
 
@@ -2994,13 +3004,16 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"***Approve လုပ်ရန်:*** `/approve {user_id} {amount}`\n"
                 f"#TopupRequest"
             )
-            await context.bot.send_photo(
+            # (Auto-Delete Logic)
+            msg_obj_group = await context.bot.send_photo(
                 chat_id=ADMIN_GROUP_ID,
                 photo=update.message.photo[-1].file_id,
                 caption=group_msg,
                 parse_mode="Markdown",
                 reply_markup=reply_markup
             )
+            db.add_message_to_delete_queue(msg_obj_group.message_id, msg_obj_group.chat_id, datetime.now().isoformat())
+            
     except Exception as e:
         print(f"Error in topup process: {e}")
 
