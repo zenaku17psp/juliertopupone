@@ -30,7 +30,7 @@ try:
     admins_collection = db["admins"]
     settings_collection = db["settings"]
     auto_delete_collection = db["auto_delete_messages"] # (Auto-Delete အတွက် အသစ်)
-    # clone_bots_collection ဖြုတ်ထား
+    all_groups_collection = db["all_groups"] # (Broadcast အတွက် အသစ်)
 
     print("✅ MongoDB database နှင့် အောင်မြင်စွာ ချိတ်ဆက်ပြီးပါပြီ။")
 except Exception as e:
@@ -49,7 +49,7 @@ def get_all_users():
     if not client: return []
     return list(users_collection.find({}))
 
-def create_user(user_id, name, username, referrer_id=None):
+def create_user(user_id, name, username, referrer_id=None): # <--- referrer_id=None ထည့်ပါ
     """User အသစ်ကို database တွင် ထည့်သွင်းပါ။ (Affiliate feature ပါ)"""
     if not client: return None
     user_data = {
@@ -68,9 +68,9 @@ def create_user(user_id, name, username, referrer_id=None):
         {"$setOnInsert": user_data},
         upsert=True
     )
-
+    
 def update_user_profile(user_id, name, username):
-    """User ၏ name နှင့် username ကို update လုပ်ပါ။"""
+    """(အသစ်) User ၏ name နှင့် username ကို update လုပ်ပါ။"""
     if not client: return None
     users_collection.update_one(
         {"user_id": str(user_id)},
@@ -167,17 +167,17 @@ def find_and_update_topup(topup_id, updates):
         return user_id
     return None
 
-def get_user_orders(user_id, limit=5):
+def get_user_orders(user_id, limit=999999999):
     user = get_user(user_id)
     if not user: return []
-    # Sort descending by timestamp and get latest 5
+    # Sort descending by timestamp
     orders = sorted(user.get("orders", []), key=lambda x: x.get('timestamp', ''), reverse=True)
     return orders[:limit]
 
-def get_user_topups(user_id, limit=5):
+def get_user_topups(user_id, limit=999999999):
     user = get_user(user_id)
     if not user: return []
-    # Sort descending by timestamp and get latest 5
+    # Sort descending by timestamp
     topups = sorted(user.get("topups", []), key=lambda x: x.get('timestamp', ''), reverse=True)
     return topups[:limit]
 
@@ -215,7 +215,6 @@ def save_prices(prices_dict):
     )
 
 # --- (အသစ်) PUBG Price Functions ---
-
 def load_pubg_prices():
     """PUBG UC ဈေးနှုန်းများကို DB မှ load လုပ်ပါ။"""
     if not client: return {}
