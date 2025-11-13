@@ -2446,24 +2446,20 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.reply_to_message:
         await update.message.reply_text(
             "❌ ***စာ သို့မဟုတ် ပုံကို reply လုပ်ပြီး:***\n\n"
-            "• `/broadcast` - (User တွေရော Group တွေရော အကုန်ပို့)\n"
-            "• `/broadcast -pin` - (အကုန်ပို့ပြီး Group တွေမှာ Pin ထောက်)\n"
-            "• `/broadcast -user` - (User တွေဆီကိုပဲ ပို့)\n"
-            "• `/broadcast -gp` - (Group တွေဆီကိုပဲ ပို့)\n"
-            "• `/broadcast -gp -pin` - (Group တွေဆီပို့ပြီး Pin ထောက်)",
+            "• `/broadcast` - (Group တွေကိုပဲ ပို့)\n"
+            "• `/broadcast -user` - (Group တွေရော User တွေရော ပို့)\n"
+            "• `/broadcast -user -pin` - (Group တွေ (Pin) ရော User တွေရော ပို့)",
             parse_mode="Markdown"
         )
         return
 
     args = context.args
     
+    # --- (ပြင်ဆင်ပြီး) New Broadcast Logic ---
     should_pin = "-pin" in args
-    send_to_users = "-user" in args
-    send_to_groups = "-gp" in args
-
-    if not send_to_users and not send_to_groups:
-        send_to_users = True
-        send_to_groups = True
+    send_to_users = "-user" in args # True if -user exists
+    send_to_groups = True           # Always True
+    # --- (ပြီး) ---
 
     replied_msg = update.message.reply_to_message
     user_success = 0
@@ -2479,6 +2475,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption_entities = replied_msg.caption_entities or None
 
         if send_to_users:
+            # (Logic မပြောင်းပါ)
             for user_doc in all_users:
                 uid = user_doc.get("user_id")
                 try:
@@ -2492,12 +2489,11 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_fail += 1
         
         if send_to_groups:
-            # --- (ပြင်ဆင်ပြီး) DB ထဲက Group အားလုံးကို ယူပါ ---
+            # (Logic မပြောင်းပါ - db.get_all_groups() ကို သုံးထားပြီးသား)
             group_chats = db.get_all_groups() 
             
             for chat_id in group_chats:
                 try:
-                    # --- (Pin Logic) ---
                     msg_obj = await context.bot.send_photo(
                         chat_id=chat_id, photo=photo_file_id, caption=caption, caption_entities=caption_entities
                     )
@@ -2510,7 +2506,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 print(f"Failed to pin message in group {chat_id}: {pin_e}")
                         else:
                             print(f"Cannot pin in group {chat_id}: Bot is not admin.")
-                    # --- (ပြီး) ---
                             
                     group_success += 1
                     await asyncio.sleep(0.05)
@@ -2523,6 +2518,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         entities = replied_msg.entities or None
 
         if send_to_users:
+            # (Logic မပြောင်းပါ)
             for user_doc in all_users:
                 uid = user_doc.get("user_id")
                 try:
@@ -2536,12 +2532,11 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_fail += 1
 
         if send_to_groups:
-            # --- (ပြင်ဆင်ပြီး) DB ထဲက Group အားလုံးကို ယူပါ ---
+            # (Logic မပြောင်းပါ - db.get_all_groups() ကို သုံးထားပြီးသား)
             group_chats = db.get_all_groups()
 
             for chat_id in group_chats:
                 try:
-                    # --- (Pin Logic) ---
                     msg_obj = await context.bot.send_message(
                         chat_id=chat_id, text=message, entities=entities
                     )
@@ -2554,7 +2549,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 print(f"Failed to pin message in group {chat_id}: {pin_e}")
                         else:
                             print(f"Cannot pin in group {chat_id}: Bot is not admin.")
-                    # --- (ပြီး) ---
                             
                     group_success += 1
                     await asyncio.sleep(0.05)
@@ -2566,10 +2560,10 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     targets = []
-    if send_to_users:
-        targets.append(f"Users: {user_success} အောင်မြင်, {user_fail} မအောင်မြင်")
     if send_to_groups:
         targets.append(f"Groups: {group_success} အောင်မြင်, {group_fail} မအောင်မြင်")
+    if send_to_users:
+        targets.append(f"Users: {user_success} အောင်မြင်, {user_fail} မအောင်မြင်")
 
     await update.message.reply_text(
         f"✅ Broadcast အောင်မြင်ပါပြီ!\n\n"
