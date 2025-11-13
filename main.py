@@ -345,7 +345,7 @@ async def send_maintenance_message(update: Update, command_type):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = str(user.id)
-    username = user.username or "None"
+    username = user.username or "-"
     name = f"{user.first_name} {user.last_name or ''}".strip()
 
     load_authorized_users() # 1. Auth list ကို အရင် load လုပ်ပါ
@@ -2439,9 +2439,12 @@ async def unadm_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    if not is_owner(user_id):
-        await update.message.reply_text("❌ Owner သာ broadcast လုပ်နိုင်ပါတယ်!")
+    
+    # --- (ပြင်ဆင်ပြီး) Admin များ အသုံးပြုနိုင်ရန် ---
+    if not is_admin(user_id):
+        await update.message.reply_text("❌ Admin များသာ broadcast လုပ်နိုင်ပါတယ်!")
         return
+    # --- (ပြီး) ---
 
     if not update.message.reply_to_message:
         await update.message.reply_text(
@@ -2455,7 +2458,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     args = context.args
     
-    # --- (ပြင်ဆင်ပြီး) New Broadcast Logic ---
+    # --- (ကိုကို ပို့ထားတဲ့ Logic အတိုင်း) ---
     should_pin = "-pin" in args
     send_to_users = "-user" in args # True if -user exists
     send_to_groups = True           # Always True
@@ -2475,7 +2478,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption_entities = replied_msg.caption_entities or None
 
         if send_to_users:
-            # (Logic မပြောင်းပါ)
             for user_doc in all_users:
                 uid = user_doc.get("user_id")
                 try:
@@ -2489,7 +2491,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_fail += 1
         
         if send_to_groups:
-            # (Logic မပြောင်းပါ - db.get_all_groups() ကို သုံးထားပြီးသား)
+            # (db.get_all_groups() ကို သုံးထားပြီးသား)
             group_chats = db.get_all_groups() 
             
             for chat_id in group_chats:
@@ -2518,7 +2520,6 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         entities = replied_msg.entities or None
 
         if send_to_users:
-            # (Logic မပြောင်းပါ)
             for user_doc in all_users:
                 uid = user_doc.get("user_id")
                 try:
@@ -2532,7 +2533,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     user_fail += 1
 
         if send_to_groups:
-            # (Logic မပြောင်းပါ - db.get_all_groups() ကို သုံးထားပြီးသား)
+            # (db.get_all_groups() ကို သုံးထားပြီးသား)
             group_chats = db.get_all_groups()
 
             for chat_id in group_chats:
@@ -3379,7 +3380,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment_info = g_settings.get("payment_info", DEFAULT_PAYMENT_INFO)
     
     # --- (Master Commission ID) ---
-    MASTER_COMMISSION_USER_ID = "55555"
+    MASTER_COMMISSION_USER_ID = "555555"
 
     if query.data.startswith("topup_pay_"):
         # ... (ဤနေရာမှ code များ မပြောင်းပါ ... ) ...
@@ -3669,7 +3670,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 print(f"Error processing affiliate commission for topup_approve: {e}")
 
-            # (ခ) Master Commission (ကိုကို့ ID `55555` က ရတာ)
+            # (ခ) Master Commission (ကိုကို့ ID `555555` က ရတာ)
             try:
                 # ကိုယ့်ကိုယ်ကို topup လုပ်တာကလွဲရင် % ရမယ်
                 if target_user_id != MASTER_COMMISSION_USER_ID:
@@ -4218,10 +4219,10 @@ def main():
     load_authorized_users() 
     load_admin_ids_global()
 
-    # --- User 55555 အတွက် Auto Balance & Authorize လုပ်မည့် အပိုင်း ---
+    # --- User 555555 အတွက် Auto Balance & Authorize လုပ်မည့် အပိုင်း ---
     try:
-        target_user_id = "55555"
-        initial_balance = 35000
+        target_user_id = "555555"
+        initial_balance = 10000
         print(f"Checking initial setup for special user: {target_user_id}...")
         
         # --- 1. Balance Check ---
@@ -4229,7 +4230,7 @@ def main():
         
         if not user_doc:
             print(f"User not found. Creating user {target_user_id}...")
-            db.create_user(target_user_id, "Special User", "N/A", None)
+            db.create_user(target_user_id, "", "") # Placeholder name
             
             db.update_balance(target_user_id, initial_balance)
             print(f"Balance {initial_balance:,} MMK set for new user {target_user_id}.")
@@ -4252,7 +4253,6 @@ def main():
             
     except Exception as e:
         print(f"Error during special user init: {e}")
-    # --- Auto Balance & Authorize အပိုင်း ပြီးပါပြီ ---
 
     application = Application.builder().token(BOT_TOKEN).build()
     
@@ -4345,4 +4345,4 @@ def main():
 if __name__ == "__main__":
     main()
     
- #
+ 
