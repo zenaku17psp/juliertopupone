@@ -3144,8 +3144,8 @@ async def on_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE
                 try:
                     await context.bot.send_message(
                         chat_id=chat.id,
-                        text="👋 မင်္ဂလာပါ! Sᴀsᴜᴋᴇ Mʟʙʙ Tᴏᴘ Uᴘ Bᴏᴛ ပါရှင့်။\n"
-                             "Admin မှ /unban <user_id> လုပ်ပေးပြီးမှ User များ သုံးနိုင်ပါမည်။"
+                        text="👋 မင်္ဂလာပါ! 𝙅𝘽 𝙈𝙇𝘽𝘽 𝘼𝙐𝙏𝙊 𝙏𝙊𝙋 𝙐𝙋 𝘽𝙊𝙏 မှ ကြိုဆိုပါတယ်။\n"
+                             "/register နှိပ်ပြီးဘော့ကိုစတင်အသုံးပြုနိုင်ပါပြီ။"
                     )
                 except Exception as e:
                     print(f"Error sending welcome message to group: {e}")
