@@ -624,17 +624,19 @@ async def mmb_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     user_name = f"{update.effective_user.first_name} {update.effective_user.last_name or ''}".strip()
+    
+    # --- (ပြင်ဆင်ပြီး) Admin Message (ပုံ အတိုင်း) ---
     admin_msg = (
         f"🔔 ***အော်ဒါအသစ်ရောက်ပါပြီ!***\n\n"
-        f"📝 ***Order ID:*** `{order_id}`\n"
-        f"👤 ***User Name:*** [{user_name}](tg://user?id={user_id})\n\n"
-        f"🆔 ***User ID:*** `{user_id}`\n"
-        f"🎮 ***Game ID:*** `{game_id}`\n"
-        f"🌐 ***Server ID:*** `{server_id}`\n"
-        f"💎 ***Amount:*** {amount}\n"
-        f"💰 ***Price:*** {price:,} MMK\n"
-        f"⏰ ***Time:*** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"📊 Status: ⏳ ***စောင့်ဆိုင်းနေသည်***"
+        f"📝 **Order ID:** `{order_id}`\n"
+        f"👤 **User Name:** {user_name}\n\n" # Admin DM မှာ Clickable မလို
+        f"🆔 **User ID:** `{user_id}`\n"
+        f"🎮 **Game ID:** `{game_id}`\n"
+        f"🌐 **Server ID:** `{server_id}`\n"
+        f"💎 **Amount:** {amount}\n"
+        f"💰 **Price:** {price:,} MMK\n"
+        f"⏰ **Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"📊 **Status:** ⏳ `စောင့်ဆိုင်းနေသည်`"
     )
 
     load_admin_ids_global()
@@ -651,25 +653,31 @@ async def mmb_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         if await is_bot_admin_in_group(context.bot, ADMIN_GROUP_ID):
+            # --- (ပြင်ဆင်ပြီး) Group Message (ပုံ အတိုင်း) ---
             group_msg = (
-                f"🛒 ***အော်ဒါအသစ် ရောက်ပါပြီ!***\n\n"
-                f"📝 ***Order ID:*** `{order_id}`\n"
-                f"👤 ***User Name:*** [{user_name}](tg://user?id={user_id})\n"
-                f"🎮 ***Game ID:*** `{game_id}`\n"
-                f"🌐 ***Server ID:*** `{server_id}`\n"
-                f"💎 ***Amount:*** {amount}\n"
-                f"💰 ***Price:*** {price:,} MMK\n"
-                f"📊 ***Status:*** ⏳ စောင့်ဆိုင်းနေသည်\n\n"
+                f"🔔 ***အော်ဒါအသစ်ရောက်ပါပြီ!***\n\n"
+                f"📝 **Order ID:** `{order_id}`\n"
+                f"👤 **User Name:** [{user_name}](tg://user?id={user_id})\n" # Group မှာ Clickable ထည့်
+                f"🆔 **User ID:** `{user_id}`\n"
+                f"🎮 **Game ID:** `{game_id}`\n"
+                f"🌐 **Server ID:** `{server_id}`\n"
+                f"💎 **Amount:** {amount}\n"
+                f"💰 **Price:** {price:,} MMK\n"
+                f"⏰ **Time:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"📊 **Status:** ⏳ `စောင့်ဆိုင်းနေသည်`\n\n"
                 f"#NewOrder"
             )
-            msg_obj = await context.bot.send_message(chat_id=ADMIN_GROUP_ID, text=group_msg, parse_mode="Markdown")
-            
-            db.add_message_to_delete_queue(msg_obj.message_id, msg_obj.chat_id, datetime.now().isoformat())
+            # --- (ပြီး) ---
+            await context.bot.send_message(
+                chat_id=ADMIN_GROUP_ID, 
+                text=group_msg, 
+                parse_mode="Markdown",
+                reply_markup=reply_markup # (အသစ်) Group မှာပါ Button ထည့်
+            )
     except Exception as e:
         print(f"Error sending to admin group in mmb_command: {e}")
         pass
-
-    # --- (Commission Logic ကို ဒီနေရာကနေ ဖြုတ်ထားပါသည်) ---
+    # --- (ပြီး) ---
 
     await update.message.reply_text(
         f"✅ ***အော်ဒါ အောင်မြင်ပါပြီ!***\n\n"
